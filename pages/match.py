@@ -4,7 +4,7 @@ Match detail — info, voting, poll, result breakdown.
 """
 
 import streamlit as st
-from data.store import (
+from data.db import (
     get_match, get_user_vote, cast_vote, update_vote,
     get_votes, get_points, get_all_users, is_registered
 )

@@ -5,11 +5,11 @@ No auth — user is already set in session_state by app.py.
 """
 
 import streamlit as st
-from data.store import (
+from data.db import (
     get_tournaments, get_matches, get_user_vote,
     is_registered, register_user, get_user_by_id
 )
-from data.store import get_points
+from data.db import get_points
 from utils.timezone import is_voting_open, format_match_times, format_countdown
 
 

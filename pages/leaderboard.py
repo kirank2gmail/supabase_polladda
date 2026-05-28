@@ -5,7 +5,7 @@ Sortable leaderboard — per-match columns, streaks, missed count.
 
 import streamlit as st
 import pandas as pd
-from data.store import get_matches, get_points, get_tournaments, get_all_users
+from data.db import get_matches, get_points, get_tournaments, get_all_users
 from utils.streaks import build_leaderboard, leaderboard_heroes
 
 
