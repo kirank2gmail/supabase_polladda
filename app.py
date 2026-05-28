@@ -24,10 +24,8 @@ h1, h2, h3 { font-family: 'Syne', sans-serif !important; font-weight: 700 !impor
 </style>
 """, unsafe_allow_html=True)
 
-from data.store import (
-    get_all_users, get_or_create_user, create_user
-)
-
+# ── All imports at top ────────────────────────────────────────────────────────
+from data.store import get_all_users, create_user
 
 # ── Session defaults ──────────────────────────────────────────────────────────
 if "page"     not in st.session_state:
@@ -38,21 +36,9 @@ if "match_id" not in st.session_state:
     st.session_state["match_id"] = None
 
 
-# ── Not logged in — show user picker ─────────────────────────────────────────
-if not st.session_state["user"]:
-    _show_user_picker()
-    st.stop()
+# ── Helper functions — defined BEFORE they are called ────────────────────────
 
-
-# ── Logged in — show navbar + route ──────────────────────────────────────────
-user = st.session_state["user"]
-_render_navbar(user)
-_route(user)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _show_user_picker():
+def show_user_picker():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<br><br>", unsafe_allow_html=True)
@@ -67,8 +53,8 @@ def _show_user_picker():
         )
         st.markdown("<br>", unsafe_allow_html=True)
 
-        users     = get_all_users()
-        names     = [u["name"] for u in users]
+        users = get_all_users()
+        names = [u["name"] for u in users]
 
         tab_exist, tab_new = st.tabs(["Sign In", "New User"])
 
@@ -94,12 +80,12 @@ def _show_user_picker():
                     st.error("Name already taken — sign in instead.")
                 else:
                     role = "admin" if is_admin else "user"
-                    user = create_user(new_name.strip(), role)
-                    st.session_state["user"] = user
+                    new_user = create_user(new_name.strip(), role)
+                    st.session_state["user"] = new_user
                     st.rerun()
 
 
-def _render_navbar(user: dict):
+def render_navbar(user: dict):
     c1, c2, c3 = st.columns([2, 5, 3])
 
     with c1:
@@ -130,17 +116,17 @@ def _render_navbar(user: dict):
     st.markdown("---")
 
 
-def _route(user: dict):
+def route(user: dict):
     page = st.session_state.get("page", "home")
 
     if page == "home":
-        from pages.home        import show_home
+        from pages.home import show_home
         show_home(user)
 
     elif page == "match":
         mid = st.session_state.get("match_id")
         if mid:
-            from pages.match   import show_match
+            from pages.match import show_match
             show_match(user, mid)
         else:
             st.session_state["page"] = "home"
@@ -158,5 +144,16 @@ def _route(user: dict):
             show_admin(user)
 
     else:
-        from pages.home        import show_home
+        from pages.home import show_home
         show_home(user)
+
+
+# ── Main flow — runs after all functions are defined ─────────────────────────
+
+if not st.session_state["user"]:
+    show_user_picker()
+    st.stop()
+
+user = st.session_state["user"]
+render_navbar(user)
+route(user)
