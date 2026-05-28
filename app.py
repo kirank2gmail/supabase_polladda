@@ -25,7 +25,7 @@ h1, h2, h3 { font-family: 'Syne', sans-serif !important; font-weight: 700 !impor
 """, unsafe_allow_html=True)
 
 # ── All imports at top ────────────────────────────────────────────────────────
-from data.store import get_all_users, create_user
+from data.db import get_all_users, create_user
 
 # ── Session defaults ──────────────────────────────────────────────────────────
 if "page"     not in st.session_state:
