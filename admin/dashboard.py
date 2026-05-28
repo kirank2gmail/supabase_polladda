@@ -7,7 +7,7 @@ No auth check here — app.py guards the route.
 import streamlit as st
 import pandas as pd
 from datetime import date, time
-from data.store import (
+from data.db import (
     create_tournament, get_tournaments, get_matches,
     create_match, bulk_create_matches, update_match_result,
     update_tournament_status
