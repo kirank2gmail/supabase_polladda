@@ -321,3 +321,10 @@ def save_points_batch(records: list[dict]):
 
 def delete_match_points(match_id: str):
     _delete_where("points", lambda r: r["match_id"] == match_id)
+
+
+def delete_match(match_id: str):
+    """Delete a match and all its associated votes and points."""
+    _delete_where("matches", lambda r: r["match_id"] == match_id)
+    _delete_where("votes",   lambda r: r["match_id"] == match_id)
+    _delete_where("points",  lambda r: r["match_id"] == match_id)
