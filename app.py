@@ -1,7 +1,7 @@
 """
 app.py — SportsPoll
 No auth version. User picks name from list or creates one.
-All nav items in a single responsive row.
+Navigation as dropdown selectbox.
 """
 
 import streamlit as st
@@ -28,17 +28,6 @@ h1, h2, h3 {
     padding-top: 1rem;
     max-width: 1100px;
 }
-
-/* Navbar button row — equal width, responsive */
-div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div > div > button {
-    width: 100% !important;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    border-radius: 8px;
-    font-size: clamp(0.7rem, 1.5vw, 0.95rem);
-    padding: 0.35rem 0.5rem;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,7 +39,7 @@ for key, val in [("page","home"), ("user",None), ("match_id",None), ("tournament
         st.session_state[key] = val
 
 
-# ── Functions ─────────────────────────────────────────────────────────────────
+# ── Functions ────────────────────────────────────────────────────────────[...]
 
 def show_user_picker():
     _, col, _ = st.columns([1, 2, 1])
@@ -102,34 +91,43 @@ def render_navbar(user: dict):
 
     # Build nav items dynamically
     nav_items = [
-        ("🏆 SportsPoll", "home"),
-        ("🏠 Home",        "home"),
+        ("🏆 Home",        "home"),
         ("🏅 Leaderboard", "leaderboard"),
     ]
     if is_admin:
         nav_items.append(("⚙️ Admin", "admin"))
 
-    # Right side: user info + switch
-    # Total columns = nav items + 1 for user info
-    n      = len(nav_items)
-    widths = [1] * n + [2]   # user info column slightly wider
-    cols   = st.columns(widths)
+    # Create columns: nav dropdown + user info + switch button
+    col1, col2 = st.columns([2, 3])
 
-    for i, (label, page) in enumerate(nav_items):
-        with cols[i]:
-            if st.button(label, use_container_width=True,
-                         key=f"nav_{page}_{i}",
-                         type="primary" if st.session_state["page"] == page else "secondary"):
-                st.session_state["page"] = page
-                st.rerun()
-
-    with cols[-1]:
-        st.caption(f"👤 **{user['name']}**")
-        if st.button("Switch User", use_container_width=True, key="switch_user"):
-            st.session_state["user"]     = None
-            st.session_state["page"]     = "home"
-            st.session_state["match_id"] = None
+    with col1:
+        # Dropdown navigation
+        nav_labels = [label for label, _ in nav_items]
+        nav_pages = [page for _, page in nav_items]
+        current_index = nav_pages.index(st.session_state["page"]) if st.session_state["page"] in nav_pages else 0
+        
+        selected = st.selectbox(
+            "Navigate",
+            options=nav_labels,
+            index=current_index,
+            key="nav_dropdown"
+        )
+        
+        selected_page = nav_pages[nav_labels.index(selected)]
+        if selected_page != st.session_state["page"]:
+            st.session_state["page"] = selected_page
             st.rerun()
+
+    with col2:
+        col_user, col_switch = st.columns([1.5, 1])
+        with col_user:
+            st.caption(f"👤 **{user['name']}**")
+        with col_switch:
+            if st.button("Switch User", use_container_width=True, key="switch_user"):
+                st.session_state["user"]     = None
+                st.session_state["page"]     = "home"
+                st.session_state["match_id"] = None
+                st.rerun()
 
     st.markdown("---")
 
@@ -166,7 +164,7 @@ def route(user: dict):
         show_home(user)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ────────────────────────────────────────────────────────────[...]
 
 if not st.session_state["user"]:
     show_user_picker()
