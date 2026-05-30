@@ -1,35 +1,31 @@
 """
 pages/home.py
-Home page — tournament selector, ongoing matches, past matches.
-No auth — user is already set in session_state by app.py.
+Home page — tournament selector, upcoming and past matches.
 """
 
 import streamlit as st
 from data.db import (
     get_tournaments, get_matches, get_user_vote,
-    is_registered, register_user, get_user_by_id
+    is_registered, register_user, get_points
 )
-from data.db import get_points
 from utils.timezone import is_voting_open, format_match_times, format_countdown
 
 
 def show_home(user: dict):
     user_tz = user.get("timezone", "Asia/Kolkata") or "Asia/Kolkata"
 
-    # ── Tournament selector ──────────────────────────────────────────────────
     tournaments = get_tournaments()
     if not tournaments:
         st.info("No tournaments available yet. Ask the admin to create one.")
         return
 
-    t_names = [t["name"] for t in tournaments]
-    t_ids   = [t["tournament_id"] for t in tournaments]
-
+    t_names  = [t["name"] for t in tournaments]
+    t_ids    = [t["tournament_id"] for t in tournaments]
     sel_name = st.selectbox("🏆 Select Tournament", t_names,
                             label_visibility="collapsed")
     sel_tid  = t_ids[t_names.index(sel_name)]
 
-    # ── Registration ─────────────────────────────────────────────────────────
+    # Registration check
     if not is_registered(user["user_id"], sel_tid):
         st.warning("You are not registered for this tournament.")
         if st.button("Register Now", type="primary"):
@@ -38,7 +34,6 @@ def show_home(user: dict):
             st.rerun()
         return
 
-    # ── Load matches ─────────────────────────────────────────────────────────
     all_matches = get_matches(tournament_id=sel_tid)
     if not all_matches:
         st.info("No matches scheduled yet.")
@@ -47,7 +42,7 @@ def show_home(user: dict):
     upcoming  = [m for m in all_matches if m["status"] == "upcoming"]
     completed = [m for m in all_matches if m["status"] == "completed"]
 
-    # ── Upcoming matches ─────────────────────────────────────────────────────
+    # ── Upcoming ──────────────────────────────────────────────────────────────
     st.markdown("### 📌 Upcoming Matches")
     if not upcoming:
         st.caption("No upcoming matches.")
@@ -57,7 +52,7 @@ def show_home(user: dict):
 
     st.markdown("---")
 
-    # ── Past matches ─────────────────────────────────────────────────────────
+    # ── Past ──────────────────────────────────────────────────────────────────
     st.markdown("### 📋 Past Matches")
     if not completed:
         st.caption("No completed matches yet.")
@@ -67,13 +62,20 @@ def show_home(user: dict):
 
     st.markdown("---")
 
-    # ── Leaderboard link ─────────────────────────────────────────────────────
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         if st.button("🏅 View Full Leaderboard", use_container_width=True):
-            st.session_state["page"]          = "leaderboard"
             st.session_state["tournament_id"] = sel_tid
-            st.rerun()
+            _go("leaderboard")
+
+
+def _go(page: str, match_id: str = None):
+    """Navigate to a page without the navbar interfering."""
+    st.session_state["page"]             = page
+    st.session_state["_nav_page"]        = page   # tells navbar not to override
+    if match_id:
+        st.session_state["match_id"] = match_id
+    st.rerun()
 
 
 def _card_upcoming(m: dict, user_id: str, user_tz: str):
@@ -84,11 +86,13 @@ def _card_upcoming(m: dict, user_id: str, user_tz: str):
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([4, 3, 2])
+
         with c1:
             st.markdown(f"**{m['title']}**")
             st.caption(f"📍 {m['location']}   📅 {times['local']}")
             if times["user"]:
                 st.caption(f"🕐 Your time: {times['user']}")
+
         with c2:
             if sev == "error":
                 st.error(msg, icon="🔴")
@@ -96,17 +100,20 @@ def _card_upcoming(m: dict, user_id: str, user_tz: str):
                 st.warning(msg, icon="⚠️")
             else:
                 st.success(msg, icon="🟢")
+
         with c3:
             if existing:
                 st.markdown(f"Your vote: **{existing['vote']}** ✅")
                 label = "Change Vote →"
             else:
                 label = "Vote Now →"
+
             if open_vote:
-                if st.button(label, key=f"home_btn_{m['match_id']}"):
-                    st.session_state["page"]     = "match"
-                    st.session_state["match_id"] = m["match_id"]
-                    st.rerun()
+                if st.button(label,
+                             key=f"home_btn_{m['match_id']}",
+                             use_container_width=True,
+                             type="primary"):
+                    _go("match", m["match_id"])
             else:
                 st.caption("Voting closed")
 
@@ -116,29 +123,33 @@ def _card_completed(m: dict, user_id: str, user_tz: str):
     result   = m.get("result", "")
     times    = format_match_times(m, user_tz)
 
-    # Points earned
     pts_list = get_points(user_id=user_id)
-    pts      = 0.0
-    for p in pts_list:
-        if p["match_id"] == m["match_id"]:
-            pts = float(p.get("total_points", 0))
-            break
+    pts      = next(
+        (float(p.get("total_points", 0)) for p in pts_list
+         if p["match_id"] == m["match_id"]), 0.0
+    )
 
     with st.container(border=True):
         c1, c2, c3 = st.columns([4, 3, 2])
+
         with c1:
             st.markdown(f"**{m['title']}**")
             st.caption(f"📍 {m['location']}   📅 {times['local']}")
+
         with c2:
             st.markdown(f"Result: **{result}**")
             if existing:
                 correct = existing["vote"] == result
-                st.caption(f"Your vote: {existing['vote']} {'✅' if correct else '❌'}")
+                st.caption(
+                    f"Your vote: {existing['vote']} "
+                    f"{'✅' if correct else '❌'}"
+                )
             else:
                 st.caption("⚠️ No vote cast")
+
         with c3:
             st.metric("Points", f"+{pts}" if pts > 0 else str(pts))
-            if st.button("Details →", key=f"hist_{m['match_id']}"):
-                st.session_state["page"]     = "match"
-                st.session_state["match_id"] = m["match_id"]
-                st.rerun()
+            if st.button("Details →",
+                         key=f"hist_{m['match_id']}",
+                         use_container_width=True):
+                _go("match", m["match_id"])
