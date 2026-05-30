@@ -31,17 +31,22 @@ h1, h2, h3 {
 
 /* Hide sidebar */
 [data-testid="stSidebar"] {
-    display: none;
+    display: none !important;
 }
 
-/* Fixed navbar */
-[data-testid="stVerticalBlockBorderWrapper"]:has(> [data-testid="stHorizontalBlock"]) {
+/* Make main content area scrollable with fixed navbar */
+[data-testid="stAppViewContainer"] > section {
+    overflow-y: auto;
+}
+
+/* Style for navbar container - make it sticky */
+div[data-testid="stVerticalBlock"] > div:first-child {
     position: sticky;
     top: 0;
     background: white;
     z-index: 999;
-    padding: 0.5rem 0;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    padding: 0.75rem 1rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 </style>
 """, unsafe_allow_html=True)
