@@ -1,8 +1,8 @@
 """
 data/gcs.py
-Google Cloud Storage backend with 5-minute cache.
+Google Cloud Storage backend with 1-minute cache.
 
-read_table()  — cached for 300s (5 min). GCS hit only once per 5 min per table.
+read_table()  — cached for 60s (1 min). GCS hit only once per 1 min per table.
 write_table() — writes to GCS immediately, then clears cache so next
                 read picks up fresh data straight away.
 
@@ -18,7 +18,7 @@ from pathlib import Path
 _LOCAL_DIR = Path(__file__).parent / "store"
 _LOCAL_DIR.mkdir(parents=True, exist_ok=True)a
 
-CACHE_TTL = 300   # 5 minutes
+CACHE_TTL = 60   # 1 minutes
 
 
 # ── GCS helpers ───────────────────────────────────────────────────────────────
