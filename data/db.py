@@ -1,7 +1,12 @@
 """
 data/db.py — Data access layer.
-Storage backend: Google Cloud Storage (or local JSON fallback for dev).
-All reads/writes go through data/gcs.py.
+Changes:
+  - No registration required: users can vote in any tournament directly
+  - Tournament ID uniqueness enforced
+  - Match ID uniqueness enforced within tournament
+  - delete_tournament deletes all related data
+  - nickname defaults to first name
+  - register_user kept for compatibility but auto-called on first vote
 """
 
 import hashlib
@@ -10,27 +15,21 @@ from datetime import datetime
 from data.gcs import read_table, write_table
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _now():          return datetime.utcnow().isoformat()
 def _uid():          return str(uuid.uuid4())[:8]
 def _hash(pw: str):  return hashlib.sha256(pw.encode()).hexdigest()
 
 def _insert(table: str, record: dict):
-    rows = read_table(table)
-    rows.append(record)
-    write_table(table, rows)
+    rows = read_table(table); rows.append(record); write_table(table, rows)
 
 def _update_where(table: str, match_fn, update_fn):
     rows = read_table(table)
     for r in rows:
-        if match_fn(r):
-            update_fn(r)
+        if match_fn(r): update_fn(r)
     write_table(table, rows)
 
 def _delete_where(table: str, match_fn):
-    rows = read_table(table)
-    write_table(table, [r for r in rows if not match_fn(r)])
+    write_table(table, [r for r in read_table(table) if not match_fn(r)])
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -39,8 +38,7 @@ def get_all_users() -> list[dict]:
     return read_table("users")
 
 def get_user_by_id(user_id: str) -> dict | None:
-    return next((u for u in read_table("users")
-                 if u["user_id"] == user_id), None)
+    return next((u for u in read_table("users") if u["user_id"] == user_id), None)
 
 def get_user_by_name(name: str) -> dict | None:
     return next((u for u in read_table("users")
@@ -55,13 +53,17 @@ def get_display_name(user_id: str) -> str:
 def admin_exists() -> bool:
     return any(u.get("role") == "admin" for u in read_table("users"))
 
+def _first_name(name: str) -> str:
+    parts = name.strip().split()
+    return parts[0].capitalize() if parts else name.strip()
+
 def create_user(name: str, password: str, role: str = "user",
                 created_by: str = "admin") -> dict:
     uid  = _uid()
     user = {
         "user_id"             : uid,
         "name"                : name,
-        "nickname"            : uid,
+        "nickname"            : _first_name(name),   # first name, not user_id
         "role"                : role,
         "password_hash"       : _hash(password),
         "must_change_password": True,
@@ -111,6 +113,9 @@ def get_tournament(tid: str) -> dict | None:
     return next((t for t in read_table("tournaments")
                  if t["tournament_id"] == tid), None)
 
+def tournament_id_exists(tid: str) -> bool:
+    return get_tournament(tid) is not None
+
 def create_tournament(data: dict):
     _insert("tournaments", {
         "tournament_id" : data["tournament_id"],
@@ -129,18 +134,26 @@ def update_tournament_status(tid: str, status: str):
         lambda r: r["tournament_id"] == tid,
         lambda r: r.update({"status": status}))
 
+def delete_tournament(tid: str):
+    """Delete tournament and ALL related data."""
+    _delete_where("tournaments",   lambda r: r["tournament_id"] == tid)
+    _delete_where("registrations", lambda r: r["tournament_id"] == tid)
+    _delete_where("matches",       lambda r: r["tournament_id"] == tid)
+    _delete_where("votes",         lambda r: r["tournament_id"] == tid)
+    _delete_where("points",        lambda r: r["tournament_id"] == tid)
 
-# ── Registrations ─────────────────────────────────────────────────────────────
+
+# ── Registrations (auto — no user action needed) ──────────────────────────────
 
 def get_registrations(tid: str) -> list[dict]:
-    return [r for r in read_table("registrations")
-            if r["tournament_id"] == tid]
+    return [r for r in read_table("registrations") if r["tournament_id"] == tid]
 
 def is_registered(user_id: str, tid: str) -> bool:
     return any(r["user_id"] == user_id and r["tournament_id"] == tid
                for r in read_table("registrations"))
 
-def register_user(user_id: str, tid: str):
+def ensure_registered(user_id: str, tid: str):
+    """Auto-register user when they first vote in a tournament."""
     if not is_registered(user_id, tid):
         _insert("registrations", {
             "reg_id"       : _uid(),
@@ -149,6 +162,10 @@ def register_user(user_id: str, tid: str):
             "registered_at": _now(),
         })
 
+# Keep for compatibility
+def register_user(user_id: str, tid: str):
+    ensure_registered(user_id, tid)
+
 
 # ── Matches ───────────────────────────────────────────────────────────────────
 
@@ -156,11 +173,16 @@ def get_matches(tournament_id: str = None, status: str = None) -> list[dict]:
     ms = read_table("matches")
     if tournament_id: ms = [m for m in ms if m["tournament_id"] == tournament_id]
     if status:        ms = [m for m in ms if m.get("status") == status]
+    # Sort by date + time
+    ms.sort(key=lambda m: m.get("match_date","") + " " + m.get("start_time",""))
     return ms
 
 def get_match(match_id: str) -> dict | None:
-    return next((m for m in read_table("matches")
-                 if m["match_id"] == match_id), None)
+    return next((m for m in read_table("matches") if m["match_id"] == match_id), None)
+
+def match_id_exists_in_tournament(match_id: str, tournament_id: str) -> bool:
+    return any(m["match_id"] == match_id and m["tournament_id"] == tournament_id
+               for m in read_table("matches"))
 
 def create_match(data: dict):
     _insert("matches", {
@@ -172,6 +194,9 @@ def create_match(data: dict):
         "start_time"   : data["start_time"],
         "timezone"     : data["timezone"],
         "options"      : data["options"],
+        "scoring_mode" : data.get("scoring_mode", "ratio"),
+        "fixed_odds"   : float(data.get("fixed_odds", 1.0)),
+        "poll_mode"    : data.get("poll_mode", "closed"),
         "status"       : "upcoming",
         "result"       : "",
         "created_by"   : data.get("created_by", "admin"),
@@ -207,25 +232,18 @@ def get_user_vote(user_id: str, match_id: str) -> dict | None:
                  if v["user_id"] == user_id and v["match_id"] == match_id), None)
 
 def cast_vote(user_id: str, match_id: str, tid: str, vote: str):
+    ensure_registered(user_id, tid)   # auto-register on first vote
     _insert("votes", {
-        "vote_id"      : _uid(),
-        "user_id"      : user_id,
-        "match_id"     : match_id,
-        "tournament_id": tid,
-        "vote"         : vote,
-        "voted_at"     : _now(),
-        "updated_at"   : "",
-        "update_count" : 0,
-    })
+        "vote_id"      : _uid(), "user_id": user_id,
+        "match_id"     : match_id, "tournament_id": tid,
+        "vote"         : vote, "voted_at": _now(),
+        "updated_at"   : "", "update_count": 0})
 
 def update_vote(user_id: str, match_id: str, new_vote: str):
     _update_where("votes",
         lambda r: r["user_id"] == user_id and r["match_id"] == match_id,
-        lambda r: r.update({
-            "vote"        : new_vote,
-            "updated_at"  : _now(),
-            "update_count": int(r.get("update_count", 0)) + 1,
-        }))
+        lambda r: r.update({"vote": new_vote, "updated_at": _now(),
+                             "update_count": int(r.get("update_count", 0)) + 1}))
 
 def delete_vote(user_id: str, match_id: str):
     _delete_where("votes",
@@ -242,7 +260,7 @@ def get_points(tournament_id: str = None, user_id: str = None) -> list[dict]:
 
 def save_points_batch(records: list[dict]):
     existing = read_table("points")
-    now      = _now()
+    now = _now()
     for r in records:
         existing.append({
             "point_id"      : _uid(),
