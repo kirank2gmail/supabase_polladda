@@ -1,11 +1,6 @@
 """
-admin/dashboard.py
-Admin panel — users, tournaments, matches, results.
-
-New in this version:
-  - Title → options auto-suggest (parses "A vs B" → "A|B")
-  - Scoring mode: ratio (existing) or fixed odds
-  - Poll mode: closed (votes hidden till end) or open (always visible)
+admin/dashboard.py — Admin panel.
+Changes: delete_tournament option added to tournaments tab.
 """
 
 import re
@@ -13,9 +8,10 @@ import streamlit as st
 import pandas as pd
 from datetime import date, time
 from data.db import (
+    tournament_id_exists, match_id_exists_in_tournament,
     get_all_users, create_user, delete_user, set_user_role,
     get_display_name, change_password,
-    get_tournaments, create_tournament, update_tournament_status,
+    get_tournaments, create_tournament, update_tournament_status, delete_tournament,
     get_matches, create_match, bulk_create_matches,
     update_match_result, delete_match,
     get_votes, delete_vote, get_user_by_id, verify_password
@@ -24,30 +20,42 @@ from data.points import run_points_calculation
 from utils.timezone import COMMON_TIMEZONES, get_match_cutoff_utc, is_voting_open
 
 
-# ── Options auto-suggest from title ──────────────────────────────────────────
+def _parse_time(raw: str) -> str:
+    """
+    Parse time string flexibly, defaulting missing mm/ss to 00.
+    Accepts: "19", "19:30", "19:30:00", "7pm", "7:30pm"
+    Returns: "HH:MM" always.
+    """
+    import re
+    raw = str(raw).strip()
+    if not raw: return "00:00"
+
+    # Handle am/pm
+    pm = raw.lower().endswith("pm")
+    am = raw.lower().endswith("am")
+    raw_clean = re.sub(r'[aApP][mM]$', '', raw).strip()
+
+    parts = re.split(r'[:.]', raw_clean)
+    try:
+        hh = int(parts[0]) if parts else 0
+        mm = int(parts[1]) if len(parts) > 1 else 0
+        # ss ignored — we only need HH:MM
+    except ValueError:
+        return "00:00"
+
+    if pm and hh != 12: hh += 12
+    if am and hh == 12: hh  = 0
+    hh = min(hh, 23)
+    mm = min(mm, 59)
+    return f"{hh:02d}:{mm:02d}"
+
 
 def _options_from_title(title: str) -> str:
-    """
-    Parse a match title and extract pipe-separated vote options.
-
-    Patterns handled:
-      "SRH vs RCB"           → "SRH|RCB"
-      "SRH vs RCB vs DC"     → "SRH|RCB|DC"
-      "Man Utd v Arsenal"    → "Man Utd|Arsenal"
-      "VER / HAM / LEC"      → "VER|HAM|LEC"
-      "India - Australia"    → "India|Australia"
-    """
-    if not title.strip():
-        return ""
-
-    # Split on common separators: vs, v, /, - (with surrounding spaces)
-    parts = re.split(r'\s+(?:vs\.?|v\.?)\s+|\s*/\s*|\s+-\s+', title.strip(), flags=re.IGNORECASE)
+    if not title.strip(): return ""
+    parts = re.split(r'\s+(?:vs\.?|v\.?)\s+|\s*/\s*|\s+-\s+',
+                     title.strip(), flags=re.IGNORECASE)
     parts = [p.strip() for p in parts if p.strip()]
-
-    if len(parts) >= 2:
-        return "|".join(parts)
-
-    return ""
+    return "|".join(parts) if len(parts) >= 2 else ""
 
 
 def _validate_options(s: str) -> tuple[bool, str]:
@@ -57,12 +65,9 @@ def _validate_options(s: str) -> tuple[bool, str]:
     return True, ""
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 def show_admin(user: dict):
     st.title("⚙️ Admin Panel")
     st.caption(f"Logged in as **{get_display_name(user['user_id'])}**")
-
     tab1, tab2, tab3, tab4 = st.tabs([
         "👥 Users", "🏆 Tournaments", "📋 Matches", "🎯 Results"
     ])
@@ -76,9 +81,7 @@ def show_admin(user: dict):
 
 def _users_tab(admin: dict):
     st.subheader("Create New User")
-    st.caption("User receives a temporary password and must change it on first login. "
-               "Nickname defaults to their first name.")
-
+    st.caption("Nickname defaults to first name. User must change password on first login.")
     with st.form("create_user"):
         c1, c2 = st.columns(2)
         uname  = c1.text_input("Username", placeholder="john")
@@ -99,9 +102,9 @@ def _users_tab(admin: dict):
                 new_u = create_user(uname.strip(), pw, role,
                                     created_by=admin["name"])
                 st.success(
-                    f"User **{uname}** created.  "
-                    f"Nickname set to **{new_u['nickname']}**.  "
-                    f"User ID: `{new_u['user_id']}`"
+                    f"User **{uname}** created. "
+                    f"Nickname: **{new_u['nickname']}**. "
+                    f"ID: `{new_u['user_id']}`"
                 )
                 st.rerun()
 
@@ -184,36 +187,81 @@ def _tournaments_tab(user: dict):
                                    min_value=0, max_value=20, value=3)
         penalty = c4.number_input("Penalty Points per Miss",
                                    min_value=0.0, max_value=10.0,
-                                   value=0.5, step=0.25)
+                                   value=1.0, step=0.5)
         st.info(f"Users get **{int(allowed)}** free misses. "
-                f"Each extra miss deducts **{penalty}** pts and adds to winner pool.")
+                f"Each extra miss costs **{penalty}** pts.")
         if st.form_submit_button("Create Tournament", type="primary"):
             if not t_id or not name:
                 st.error("ID and Name required.")
             else:
-                create_tournament({
-                    "tournament_id": t_id, "name": name, "sport": sport,
-                    "start_date": str(s_date), "allowed_misses": allowed,
-                    "penalty_points": penalty, "created_by": user["name"]})
-                st.success(f"Tournament **{name}** created!")
-                st.rerun()
+                if tournament_id_exists(t_id):
+                    st.error(f"Tournament ID `{t_id}` already exists. Choose a unique ID.")
+                else:
+                    create_tournament({
+                        "tournament_id": t_id, "name": name, "sport": sport,
+                        "start_date": str(s_date), "allowed_misses": allowed,
+                        "penalty_points": penalty, "created_by": user["name"]})
+                    st.success(f"Tournament **{name}** created!")
+                    st.rerun()
 
     st.markdown("---")
     st.subheader("Existing Tournaments")
-    for t in get_tournaments():
+    tournaments = get_tournaments()
+    if not tournaments:
+        st.caption("No tournaments yet.")
+        return
+
+    for t in tournaments:
         with st.container(border=True):
-            c1, c2, c3 = st.columns([4, 2, 2])
-            c1.markdown(f"**{t['name']}** — {t['sport']}")
-            c1.caption(f"ID: `{t['tournament_id']}`  ·  Starts: {t['start_date']}")
-            c2.metric("Free Misses",  t["allowed_misses"])
-            c2.metric("Penalty Pts",  t["penalty_points"])
-            status = t.get("status","upcoming")
-            opts   = ["upcoming","active","completed"]
-            new_s  = c3.selectbox("Status", opts, index=opts.index(status),
-                                   key=f"ts_{t['tournament_id']}")
-            if c3.button("Update", key=f"tsb_{t['tournament_id']}"):
-                update_tournament_status(t["tournament_id"], new_s)
-                st.rerun()
+            c1, c2, c3, c4 = st.columns([4, 2, 2, 1])
+
+            with c1:
+                st.markdown(f"**{t['name']}** — {t['sport']}")
+                st.caption(
+                    f"ID: `{t['tournament_id']}`  ·  "
+                    f"Starts: {t['start_date']}  ·  "
+                    f"Misses: {t['allowed_misses']}  ·  "
+                    f"Penalty: {t['penalty_points']} pts"
+                )
+
+            with c2:
+                status = t.get("status", "upcoming")
+                opts   = ["upcoming", "active", "completed"]
+                new_s  = st.selectbox("Status", opts,
+                                       index=opts.index(status),
+                                       key=f"ts_{t['tournament_id']}")
+                if st.button("Update", key=f"tsb_{t['tournament_id']}"):
+                    update_tournament_status(t["tournament_id"], new_s)
+                    st.rerun()
+
+            with c3:
+                ms = get_matches(t["tournament_id"])
+                st.metric("Matches", len(ms))
+
+            with c4:
+                # Delete tournament
+                del_key = f"del_t_{t['tournament_id']}"
+                if st.button("🗑️", key=f"delt_{t['tournament_id']}",
+                              help="Delete tournament and all data"):
+                    st.session_state[del_key] = True
+
+            if st.session_state.get(f"del_t_{t['tournament_id']}"):
+                st.error(
+                    f"⚠️ Delete **{t['name']}**? "
+                    f"This will permanently delete all matches, votes, "
+                    f"points and registrations for this tournament."
+                )
+                cc1, cc2 = st.columns(2)
+                if cc1.button("Yes, delete everything",
+                               key=f"deltyes_{t['tournament_id']}",
+                               type="primary"):
+                    delete_tournament(t["tournament_id"])
+                    st.session_state.pop(f"del_t_{t['tournament_id']}", None)
+                    st.success(f"Tournament **{t['name']}** and all its data deleted.")
+                    st.rerun()
+                if cc2.button("Cancel", key=f"deltno_{t['tournament_id']}"):
+                    st.session_state.pop(f"del_t_{t['tournament_id']}", None)
+                    st.rerun()
 
 
 # ── Matches ───────────────────────────────────────────────────────────────────
@@ -292,31 +340,23 @@ def _bulk_upload(tid: str, user: dict):
     st.markdown("""
 **CSV columns:** `match_id, title, location, match_date, start_time, timezone, options, scoring_mode, fixed_odds, poll_mode`
 
-- `scoring_mode`: `ratio` (default) or `fixed`
-- `fixed_odds`: points for correct pick when scoring_mode=fixed (e.g. `2.5`)
-- `poll_mode`: `closed` (default, votes hidden till end) or `open` (always visible)
-
-```
-match_id,title,location,match_date,start_time,timezone,options,scoring_mode,fixed_odds,poll_mode
-IPL2026-M001,SRH vs RCB,Hyderabad,2026-05-24,19:30,Asia/Kolkata,SRH|RCB,ratio,,closed
-IPL2026-M002,MI vs CSK,Mumbai,2026-05-25,19:30,Asia/Kolkata,MI|CSK,fixed,2.5,open
-```
+- `scoring_mode`: `ratio` or `fixed`
+- `fixed_odds`: winner points when scoring_mode=fixed
+- `poll_mode`: `closed` or `open`
+- `options`: auto-filled from title if left blank
     """)
     uploaded = st.file_uploader("Upload CSV", type="csv")
     if not uploaded: return
     try:
         df = pd.read_csv(uploaded, dtype=str).fillna("")
         st.dataframe(df, use_container_width=True)
-        required = ["match_id","title","location","match_date","start_time","timezone","options"]
+        required = ["match_id","title","location","match_date","start_time","timezone"]
         missing  = [c for c in required if c not in df.columns]
         if missing: st.error(f"Missing columns: {missing}"); return
 
         errors = []
         for _, row in df.iterrows():
-            # Auto-suggest options from title if blank
-            opts = str(row.get("options","")).strip()
-            if not opts:
-                opts = _options_from_title(str(row.get("title","")))
+            opts = str(row.get("options","")).strip() or _options_from_title(str(row.get("title","")))
             valid, err = _validate_options(opts)
             if not valid: errors.append(f"`{row['match_id']}`: {err}")
         if errors:
@@ -336,10 +376,14 @@ IPL2026-M002,MI vs CSK,Mumbai,2026-05-25,19:30,Asia/Kolkata,MI|CSK,fixed,2.5,ope
                 r = row.to_dict()
                 if not r.get("options","").strip():
                     r["options"] = _options_from_title(r.get("title",""))
-                if not r.get("scoring_mode","").strip():
-                    r["scoring_mode"] = "ratio"
-                if not r.get("poll_mode","").strip():
-                    r["poll_mode"] = "closed"
+                if not r.get("scoring_mode","").strip(): r["scoring_mode"] = "ratio"
+                if not r.get("poll_mode","").strip():    r["poll_mode"]    = "closed"
+                # Normalise time: hh:mm:ss → hh:mm, missing parts default to 00
+                r["start_time"] = _parse_time(r.get("start_time","00:00"))
+                # Check match ID uniqueness
+                if match_id_exists_in_tournament(r["match_id"], tid):
+                    st.warning(f"Skipped `{r['match_id']}` — ID already exists.")
+                    continue
                 rows.append(r)
             bulk_create_matches(tid, rows, user["name"])
             st.success(f"{len(rows)} matches imported!")
@@ -349,32 +393,21 @@ IPL2026-M002,MI vs CSK,Mumbai,2026-05-25,19:30,Asia/Kolkata,MI|CSK,fixed,2.5,ope
 
 
 def _single_form(tid: str, user: dict):
-    # Use session state to allow live title → options suggestion
-    # outside of form (forms don't support dynamic updates mid-entry)
-
     st.markdown("#### Match Details")
-
     c1, c2   = st.columns(2)
-    match_id = c1.text_input("Match ID", placeholder="IPL2026-M001",
-                              key="sf_match_id")
-    title    = c2.text_input("Title",    placeholder="SRH vs RCB",
-                              key="sf_title")
-    location = c1.text_input("Location", placeholder="Hyderabad",
-                              key="sf_location")
-    m_date   = c2.date_input("Match Date", value=date.today(),
-                              key="sf_date")
+    match_id = c1.text_input("Match ID", placeholder="IPL2026-M001", key="sf_match_id")
+    title    = c2.text_input("Title",    placeholder="SRH vs RCB",   key="sf_title")
+    location = c1.text_input("Location", placeholder="Hyderabad",    key="sf_location")
+    m_date   = c2.date_input("Match Date", value=date.today(),        key="sf_date")
     c3, c4   = st.columns(2)
-    s_time   = c3.time_input("Start Time (venue local)", value=time(19, 30),
-                              key="sf_time")
+    s_time   = c3.time_input("Start Time (venue local)", value=time(19, 30), key="sf_time")
     tz       = c4.selectbox("Venue Timezone", COMMON_TIMEZONES, key="sf_tz")
 
-    # Auto-suggest options from title
     suggested = _options_from_title(title) if title else ""
     options   = st.text_input(
         "Vote Options (pipe separated, min 2)",
-        value=suggested,
+        value=suggested, key="sf_options",
         placeholder="SRH|RCB  or  VER|HAM|LEC|NOR",
-        key="sf_options",
         help="Auto-filled from title — edit freely"
     )
     if options:
@@ -385,7 +418,6 @@ def _single_form(tid: str, user: dict):
             parts = [o.strip() for o in options.split("|") if o.strip()]
             st.success(f"{len(parts)} options: {' · '.join(parts)}")
 
-    # Scoring mode
     st.markdown("#### Scoring & Poll Settings")
     sc1, sc2, sc3 = st.columns(3)
     scoring_mode  = sc1.selectbox(
@@ -396,44 +428,31 @@ def _single_form(tid: str, user: dict):
     )
     fixed_odds = sc2.number_input(
         "Fixed Odds (winner points)",
-        min_value=0.1, max_value=100.0,
-        value=2.0, step=0.5,
-        key="sf_odds",
-        disabled=(scoring_mode == "ratio"),
-        help="Points awarded to correct pickers. Losers get 1 pt."
+        min_value=0.1, max_value=100.0, value=2.0, step=0.5,
+        key="sf_odds", disabled=(scoring_mode == "ratio"),
+        help="Points for correct pickers. Losers -1, missed -penalty → bank."
     )
     poll_mode = sc3.selectbox(
         "Poll Mode",
         ["closed", "open"],
         format_func=lambda x: "🔒 Closed (votes hidden till end)"
-                               if x == "closed" else "👁 Open (votes always visible)",
+                               if x == "closed" else "👁 Open (always visible)",
         key="sf_poll"
     )
 
-    # Scoring explanation
     if scoring_mode == "ratio":
-        st.info(
-            "**Ratio mode:**  "
-            "Winner pts = (loser votes ÷ winner votes) + (penalty pool ÷ winner votes).  "
-            "Loser = **−1 pt**.  "
-            "Penalised missed voters contribute to winner bonus pool."
-        )
+        st.info("**Ratio:** Winners share all points lost by losers and penalised missed voters. "
+                "Losers = −1 → winner pool. Missed beyond limit = −penalty → winner pool.")
     else:
-        st.info(
-            f"**Fixed mode:**  "
-            f"Every correct picker gets **+{fixed_odds} pts** (flat).  "
-            f"Every incorrect picker loses **−1 pt**.  "
-            "Penalised missed voters lose penalty pts → goes to bank fund "
-            "(not distributed to winners)."
-        )
+        st.info(f"**Fixed:** Winners get **+{fixed_odds} pts** each. "
+                "Losers = −1 → bank. Missed beyond limit = −penalty → bank.")
 
     try:
         utc = get_match_cutoff_utc({"match_date": str(m_date),
                                      "start_time": s_time.strftime("%H:%M"),
                                      "timezone": tz})
         st.caption(f"Voting closes: **{utc.strftime('%d %b %Y %H:%M UTC')}**")
-    except Exception:
-        pass
+    except Exception: pass
 
     if st.button("Add Match", type="primary", key="sf_submit"):
         if not match_id or not title:
@@ -443,22 +462,20 @@ def _single_form(tid: str, user: dict):
             if not valid:
                 st.error(err)
             else:
-                create_match({
-                    "match_id"     : match_id,
-                    "tournament_id": tid,
-                    "title"        : title,
-                    "location"     : location,
-                    "match_date"   : str(m_date),
-                    "start_time"   : s_time.strftime("%H:%M"),
-                    "timezone"     : tz,
-                    "options"      : options,
-                    "scoring_mode" : scoring_mode,
-                    "fixed_odds"   : fixed_odds,
-                    "poll_mode"    : poll_mode,
-                    "created_by"   : user["name"],
-                })
-                st.success(f"Match `{match_id}` added!")
-                st.rerun()
+                if match_id_exists_in_tournament(match_id, tid):
+                    st.error(f"Match ID `{match_id}` already exists in this tournament.")
+                else:
+                    create_match({
+                        "match_id": match_id, "tournament_id": tid,
+                        "title": title, "location": location,
+                        "match_date": str(m_date),
+                        "start_time": s_time.strftime("%H:%M"),
+                        "timezone": tz, "options": options,
+                        "scoring_mode": scoring_mode, "fixed_odds": fixed_odds,
+                        "poll_mode": poll_mode, "created_by": user["name"],
+                    })
+                    st.success(f"Match `{match_id}` added!")
+                    st.rerun()
 
 
 # ── Results ───────────────────────────────────────────────────────────────────
@@ -480,13 +497,10 @@ def _results_tab():
     done       = [m for m in all_ms if m["status"] == "completed"]
 
     if still_open:
-        st.info(f"**{len(still_open)}** match(es) still have voting open — "
-                "results cannot be entered until poll closes.")
+        st.info(f"**{len(still_open)}** match(es) still have voting open.")
         for m in still_open:
-            scoring = m.get("scoring_mode","ratio")
             st.caption(f"⏳ `{m['match_id']}` — {m['title']} — "
-                       f"closes {m['start_time']} {m['timezone'].split('/')[-1]} — "
-                       f"scoring: {scoring}")
+                       f"closes {m['start_time']} {m['timezone'].split('/')[-1]}")
 
     st.subheader("Awaiting Result Entry")
     if not pending:
@@ -495,23 +509,15 @@ def _results_tab():
         for m in pending:
             opts = [o.strip() for o in m["options"].split("|") if o.strip()]
             scoring = m.get("scoring_mode","ratio")
-            odds    = m.get("fixed_odds","")
             with st.container(border=True):
                 c1, c2, c3 = st.columns([3, 2, 2])
                 c1.markdown(f"**{m['title']}**")
-                c1.caption(
-                    f"`{m['match_id']}`  ·  {m['match_date']} {m['start_time']}  ·  "
-                    f"Scoring: **{scoring}**"
-                    + (f" @ {odds} pts" if scoring == "fixed" else "")
-                )
-                winner = c2.selectbox("Winner / Result", opts,
-                                       key=f"r_{m['match_id']}")
-                if c3.button("Save Result", key=f"rb_{m['match_id']}",
-                              type="primary"):
+                c1.caption(f"`{m['match_id']}`  ·  {m['match_date']}  ·  Scoring: **{scoring}**")
+                winner = c2.selectbox("Winner", opts, key=f"r_{m['match_id']}")
+                if c3.button("Save Result", key=f"rb_{m['match_id']}", type="primary"):
                     with st.spinner("Calculating points..."):
                         update_match_result(m["match_id"], winner)
-                        records = run_points_calculation(
-                            m["match_id"], sel_tid, winner)
+                        records = run_points_calculation(m["match_id"], sel_tid, winner)
                     correct = sum(1 for r in records if r.get("total_points",0) > 0)
                     st.success(f"**{winner}** won — {correct} correct voter(s) awarded points")
                     st.rerun()
@@ -519,15 +525,13 @@ def _results_tab():
     if done:
         st.markdown("---")
         st.subheader("Update / Correct Result")
-        st.caption("Changing result recalculates all points.")
         for m in done:
             opts    = [o.strip() for o in m["options"].split("|") if o.strip()]
             cur_idx = opts.index(m["result"]) if m["result"] in opts else 0
             with st.container(border=True):
                 c1, c2, c3 = st.columns([3, 2, 2])
                 c1.markdown(f"**{m['title']}**")
-                c1.caption(f"`{m['match_id']}`  ·  Result: **{m['result']}**  ·  "
-                           f"Scoring: **{m.get('scoring_mode','ratio')}**")
+                c1.caption(f"`{m['match_id']}`  ·  Result: **{m['result']}**")
                 new_w = c2.selectbox("Change to", opts, index=cur_idx,
                                       key=f"corr_{m['match_id']}")
                 if c3.button("Update Result", key=f"corrb_{m['match_id']}",
