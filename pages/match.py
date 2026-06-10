@@ -132,13 +132,19 @@ def _submit_vote(user_id, match, option, existing):
 # ── Poll summary ──────────────────────────────────────────────────────────────
 
 def _poll_summary(match, options, voting_open, is_admin):
-    votes = get_votes(match_id=match["match_id"])
-    total = len(votes)
+    votes     = get_votes(match_id=match["match_id"])
+    total     = len(votes)
+    poll_mode = match.get("poll_mode", "closed")   # open | closed
 
     st.subheader("📊 Poll")
 
-    if voting_open and not is_admin:
-        # Regular users — hide all vote details while poll is open
+    # Visibility rules:
+    #   closed poll + voting open + not admin → hide everything
+    #   open poll → always show full breakdown (admin and users)
+    #   admin → always see everything regardless of mode
+    hide_from_user = voting_open and not is_admin and poll_mode == "closed"
+
+    if hide_from_user:
         st.caption(
             f"**{total}** vote(s) cast so far — "
             "individual votes and counts shown after voting closes."
@@ -201,8 +207,10 @@ def _result_section(match, options, user_id):
         opt_votes = [v for v in votes if v["vote"] == opt]
         is_win    = opt == result
         icon      = "✅" if is_win else "❌"
-        pts_label = (f"  —  +{winner_pts} pts each"
-                     if is_win and winner_pts else "  —  0 pts")
+        if is_win:
+            pts_label = f"  —  +{winner_pts} pts each" if winner_pts else "  —  +? pts"
+        else:
+            pts_label = "  —  −1 pt each"
 
         with st.expander(f"{icon}  **{opt}** voters{pts_label}  ({len(opt_votes)})"):
             if not opt_votes:
@@ -218,7 +226,7 @@ def _result_section(match, options, user_id):
                     st.markdown(
                         f"👤 **{name}**   "
                         f"voted {v.get('voted_at', '')[:16]}   "
-                        f"{'  +' + str(u_pts) + ' pts' if u_pts > 0 else '  0 pts'}"
+                        + (f"  +{u_pts} pts" if u_pts > 0 else (f"  {u_pts} pts" if u_pts < 0 else "  0 pts"))
                     )
 
     missed_pts = [
