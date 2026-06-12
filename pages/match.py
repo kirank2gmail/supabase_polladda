@@ -183,6 +183,8 @@ def _poll_summary(match, options, voting_open, is_admin):
 
     st.subheader("📊 Poll")
 
+    # Votes hidden from regular users ONLY while poll is still open AND mode=closed
+    # Once poll closes (voting_open=False), all votes visible to everyone
     hide = voting_open and not is_admin and poll_mode == "closed"
     if hide:
         st.caption(
