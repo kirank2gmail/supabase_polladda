@@ -179,8 +179,46 @@ def save_points_batch(records: list[dict]):
     write_table("points", existing)
 
 
+def _deduplicate_votes(match_id: str):
+    """
+    Keep only the most recent vote per user per match.
+    Sorts by updated_at then voted_at, keeps latest, deletes rest.
+    """
+    from collections import defaultdict
+    votes  = read_table("votes")
+    by_user: dict = defaultdict(list)
+    for v in votes:
+        if v.get("match_id") == match_id:
+            by_user[v["user_id"]].append(v)
+
+    changed  = False
+    keep_ids = set()
+    drop_ids = set()
+
+    for uid, uvotes in by_user.items():
+        if len(uvotes) <= 1:
+            if uvotes:
+                keep_ids.add(uvotes[0]["vote_id"])
+            continue
+        # Sort newest first
+        uvotes.sort(
+            key=lambda v: v.get("updated_at") or v.get("voted_at") or "",
+            reverse=True
+        )
+        keep_ids.add(uvotes[0]["vote_id"])
+        for v in uvotes[1:]:
+            drop_ids.add(v["vote_id"])
+        changed = True
+
+    if changed and drop_ids:
+        cleaned = [v for v in votes if v.get("vote_id") not in drop_ids]
+        write_table("votes", cleaned)
+
+
 def run_points_calculation(match_id: str, tournament_id: str,
                             winning_option: str) -> list[dict]:
+    """Dedup votes → delete old points → recalculate → save."""
+    _deduplicate_votes(match_id)
     delete_match_points(match_id)
     records = calculate_match_points(match_id, tournament_id, winning_option)
     if records:
