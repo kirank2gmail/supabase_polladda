@@ -31,26 +31,59 @@ def email_configured() -> bool:
 # ── Pillow image rendering ────────────────────────────────────────────────────
 
 def _get_font(size: int, bold: bool = False):
-    """Load Segoe UI if available, fall back to DejaVu then default."""
+    """
+    Load Segoe UI if available (Windows local dev).
+    On Linux (Streamlit Cloud): download Segoe UI from a CDN once and cache.
+    Falls back to DejaVu Sans (good Segoe UI substitute) then PIL default.
+    """
     from PIL import ImageFont
-    candidates = []
-    if bold:
-        candidates = [
-            "C:/Windows/Fonts/segoeuib.ttf",           # Windows
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
+    import os, urllib.request
+
+    # ── Try Segoe UI (Windows) ────────────────────────────────────────────────
+    win_path = ("C:/Windows/Fonts/segoeuib.ttf" if bold
+                else "C:/Windows/Fonts/segoeui.ttf")
+    try:
+        return ImageFont.truetype(win_path, size)
+    except Exception:
+        pass
+
+    # ── Try cached download (Linux/Cloud) ─────────────────────────────────────
+    cache_dir  = "/tmp/sportspoll_fonts"
+    os.makedirs(cache_dir, exist_ok=True)
+    fname      = "segoeuib.ttf" if bold else "segoeui.ttf"
+    cache_path = os.path.join(cache_dir, fname)
+
+    if not os.path.exists(cache_path):
+        # Public CDN mirrors for Segoe UI (redistributable subset)
+        urls = [
+            f"https://raw.githubusercontent.com/matomo-org/travis-scripts/master/fonts/{fname}",
         ]
-    else:
-        candidates = [
-            "C:/Windows/Fonts/segoeui.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/System/Library/Fonts/Helvetica.ttc",
-        ]
-    for path in candidates:
+        for url in urls:
+            try:
+                urllib.request.urlretrieve(url, cache_path)
+                break
+            except Exception:
+                pass
+
+    if os.path.exists(cache_path):
+        try:
+            return ImageFont.truetype(cache_path, size)
+        except Exception:
+            pass
+
+    # ── Fall back to DejaVu Sans (visually similar, always on Streamlit Cloud) 
+    linux_candidates = [
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
+         else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
+         else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
+    ]
+    for path in linux_candidates:
         try:
             return ImageFont.truetype(path, size)
         except Exception:
             continue
+
     return ImageFont.load_default()
 
 
@@ -122,10 +155,10 @@ def _render_table_png(headers: list[str], rows: list[list],
     SUBTITLE_H = 28
     FOOTER_H   = 28
 
-    font_hdr   = _get_font(14, bold=True)
-    font_body  = _get_font(13, bold=False)
-    font_title = _get_font(17, bold=True)
-    font_sub   = _get_font(13, bold=False)
+    font_hdr   = _get_font(15, bold=True)
+    font_body  = _get_font(14, bold=False)
+    font_title = _get_font(18, bold=True)
+    font_sub   = _get_font(14, bold=False)
 
     # Measure column widths
     dummy = Image.new("RGB", (1, 1))
@@ -193,7 +226,7 @@ def _render_table_png(headers: list[str], rows: list[list],
     now = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
     draw.text((PADDING, y + 6),
               f"SportsPoll  ·  {now}",
-              font=_get_font(11), fill=(160, 160, 170))
+              font=_get_font(12), fill=(160, 160, 170))
 
     # Outer border
     draw.rectangle([PADDING - 1, TITLE_H + SUBTITLE_H + PADDING - 1,
