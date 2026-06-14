@@ -97,6 +97,20 @@ def show_home(user: dict):
                 if idx < n_done - 1:
                     st.divider()
 
+    st.markdown("---")
+
+    # ── Leaderboard button ────────────────────────────────────────────────────
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if st.button("🏅 View Full Leaderboard", use_container_width=True,
+                     key="home_lb_btn"):
+            st.session_state["tournament_id"] = sel_tid
+            st.session_state["page"]          = "leaderboard"
+            # Sync _last_nav so navbar doesn't override this navigation
+            st.session_state["_last_nav"]     = "leaderboard"
+            st.rerun()
+
+
 # ── Navigation helper ─────────────────────────────────────────────────────────
 
 def _go_match(match_id: str, tournament_id: str, all_matches: list):
