@@ -32,58 +32,38 @@ def email_configured() -> bool:
 
 def _get_font(size: int, bold: bool = False):
     """
-    Load Segoe UI if available (Windows local dev).
-    On Linux (Streamlit Cloud): download Segoe UI from a CDN once and cache.
-    Falls back to DejaVu Sans (good Segoe UI substitute) then PIL default.
+    Font priority (best readability on Ubuntu/Streamlit Cloud):
+      1. Liberation Sans  — metrically identical to Arial/Segoe UI, always on Ubuntu
+      2. DejaVu Sans      — excellent fallback, also always on Ubuntu
+      3. Segoe UI         — available on Windows local dev
+      4. PIL default      — last resort
+    Liberation Sans is specifically designed to match Segoe UI metrics
+    and is pre-installed on every Ubuntu system including Streamlit Cloud.
     """
     from PIL import ImageFont
-    import os, urllib.request
 
-    # ── Try Segoe UI (Windows) ────────────────────────────────────────────────
-    win_path = ("C:/Windows/Fonts/segoeuib.ttf" if bold
-                else "C:/Windows/Fonts/segoeui.ttf")
-    try:
-        return ImageFont.truetype(win_path, size)
-    except Exception:
-        pass
-
-    # ── Try cached download (Linux/Cloud) ─────────────────────────────────────
-    cache_dir  = "/tmp/sportspoll_fonts"
-    os.makedirs(cache_dir, exist_ok=True)
-    fname      = "segoeuib.ttf" if bold else "segoeui.ttf"
-    cache_path = os.path.join(cache_dir, fname)
-
-    if not os.path.exists(cache_path):
-        # Public CDN mirrors for Segoe UI (redistributable subset)
-        urls = [
-            f"https://raw.githubusercontent.com/matomo-org/travis-scripts/master/fonts/{fname}",
+    candidates = []
+    if bold:
+        candidates = [
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "C:/Windows/Fonts/segoeuib.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
         ]
-        for url in urls:
-            try:
-                urllib.request.urlretrieve(url, cache_path)
-                break
-            except Exception:
-                pass
-
-    if os.path.exists(cache_path):
-        try:
-            return ImageFont.truetype(cache_path, size)
-        except Exception:
-            pass
-
-    # ── Fall back to DejaVu Sans (visually similar, always on Streamlit Cloud) 
-    linux_candidates = [
-        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
-         else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-        ("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold
-         else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"),
-    ]
-    for path in linux_candidates:
+    else:
+        candidates = [
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "/System/Library/Fonts/Helvetica.ttc",
+        ]
+    for path in candidates:
         try:
             return ImageFont.truetype(path, size)
         except Exception:
             continue
-
     return ImageFont.load_default()
 
 
@@ -155,10 +135,10 @@ def _render_table_png(headers: list[str], rows: list[list],
     SUBTITLE_H = 28
     FOOTER_H   = 28
 
-    font_hdr   = _get_font(15, bold=True)
-    font_body  = _get_font(14, bold=False)
-    font_title = _get_font(18, bold=True)
-    font_sub   = _get_font(14, bold=False)
+    font_hdr   = _get_font(16, bold=True)
+    font_body  = _get_font(15, bold=False)
+    font_title = _get_font(19, bold=True)
+    font_sub   = _get_font(15, bold=False)
 
     # Measure column widths
     dummy = Image.new("RGB", (1, 1))
@@ -166,12 +146,14 @@ def _render_table_png(headers: list[str], rows: list[list],
 
     col_widths = []
     for ci, h in enumerate(headers):
-        w = dc.textlength(h, font=font_hdr) + 24
+        w = dc.textlength(h, font=font_hdr) + 28
         for row in rows:
             if ci < len(row):
-                cw = dc.textlength(str(row[ci]), font=font_body) + 24
+                cw = dc.textlength(str(row[ci]), font=font_body) + 28
                 w  = max(w, cw)
-        col_widths.append(max(int(w), 60))
+        # Rank column (#) gets a narrow minimum; all others get standard minimum
+        min_w = 36 if ci == 0 else 60
+        col_widths.append(max(int(w), min_w))
 
     total_w = sum(col_widths) + PADDING * 2
     total_h = (TITLE_H + SUBTITLE_H + HDR_ROW_H +
@@ -194,7 +176,12 @@ def _render_table_png(headers: list[str], rows: list[list],
     x = PADDING
     draw.rectangle([PADDING, y, total_w - PADDING, y + HDR_ROW_H], fill=HDR_BG)
     for ci, h in enumerate(headers):
-        draw.text((x + 8, y + 10), h, font=font_hdr, fill=HDR_FG)
+        if ci == 0:
+            tw  = draw.textlength(h, font=font_hdr)
+            tx  = x + max(4, (col_widths[ci] - int(tw)) // 2)
+            draw.text((tx, y + 10), h, font=font_hdr, fill=HDR_FG)
+        else:
+            draw.text((x + 8, y + 10), h, font=font_hdr, fill=HDR_FG)
         x += col_widths[ci]
     y += HDR_ROW_H
 
@@ -206,14 +193,20 @@ def _render_table_png(headers: list[str], rows: list[list],
         x = PADDING
         for ci, (cell_val, cell_bg) in enumerate(zip(row, bgs)):
             # Colour the cell if not default
-            if cell_bg not in (CELL_NONE, CELL_WIN if False else CELL_NONE):
-                if cell_bg != row_bg:
-                    draw.rectangle([x + 2, y + 2,
-                                    x + col_widths[ci] - 2,
-                                    y + ROW_H - 2],
-                                   fill=cell_bg)
+            if cell_bg != row_bg:
+                draw.rectangle([x + 2, y + 2,
+                                x + col_widths[ci] - 2,
+                                y + ROW_H - 2],
+                               fill=cell_bg)
             fg = _text_colour(cell_bg) if cell_bg != row_bg else TEXT_BLK
-            draw.text((x + 8, y + 8), str(cell_val), font=font_body, fill=fg)
+
+            # Rank column: center-align in narrow space
+            if ci == 0:
+                tw  = draw.textlength(str(cell_val), font=font_body)
+                tx  = x + max(4, (col_widths[ci] - int(tw)) // 2)
+                draw.text((tx, y + 8), str(cell_val), font=font_body, fill=fg)
+            else:
+                draw.text((x + 8, y + 8), str(cell_val), font=font_body, fill=fg)
             x += col_widths[ci]
 
         # Row border
@@ -226,7 +219,7 @@ def _render_table_png(headers: list[str], rows: list[list],
     now = datetime.utcnow().strftime("%d %b %Y %H:%M UTC")
     draw.text((PADDING, y + 6),
               f"SportsPoll  ·  {now}",
-              font=_get_font(12), fill=(160, 160, 170))
+              font=_get_font(13), fill=(160, 160, 170))
 
     # Outer border
     draw.rectangle([PADDING - 1, TITLE_H + SUBTITLE_H + PADDING - 1,
