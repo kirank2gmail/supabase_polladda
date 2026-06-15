@@ -57,17 +57,50 @@ def _now():
 
 def _count_prior_misses(user_id: str, match_id: str,
                          tournament_id: str) -> int:
+    """
+    Count matches this user missed BEFORE match_id in this tournament.
+
+    Key rule: only count misses starting from the player's FIRST voted match.
+    Matches before a player's first vote are not counted as misses —
+    they simply weren't playing yet.
+    """
     all_matches = _get_matches(tournament_id=tournament_id, status="completed")
     all_votes   = _get_votes(tournament_id=tournament_id)
+
     this_match  = next((m for m in all_matches
                         if m["match_id"] == match_id), None)
     if not this_match:
         return 0
+
     this_dt   = f"{this_match['match_date']} {this_match['start_time']}"
-    voted_ids = {v["match_id"] for v in all_votes if v["user_id"] == user_id}
+
+    # All matches this user has voted in for this tournament
+    user_votes    = [v for v in all_votes if v["user_id"] == user_id]
+    voted_ids     = {v["match_id"] for v in user_votes}
+
+    # Find the player's earliest voted match date in this tournament
+    # (only consider matches that are in the completed list)
+    completed_ids = {m["match_id"] for m in all_matches}
+    voted_and_completed = [
+        f"{m['match_date']} {m['start_time']}"
+        for m in all_matches
+        if m["match_id"] in voted_ids
+    ]
+
+    if not voted_and_completed:
+        # Player has never voted in this tournament — no misses
+        return 0
+
+    first_vote_dt = min(voted_and_completed)
+
+    # Count matches where:
+    #   1. After or on the player's first voted match date (they were playing)
+    #   2. Before the current match
+    #   3. Player did not vote
     return sum(
         1 for m in all_matches
         if m["match_id"] != match_id
+        and f"{m['match_date']} {m['start_time']}" >= first_vote_dt
         and f"{m['match_date']} {m['start_time']}" < this_dt
         and m["match_id"] not in voted_ids
     )
@@ -215,33 +248,10 @@ def _deduplicate_votes(match_id: str):
         write_table("votes", cleaned)
 
 
-ABANDONED = "abandoned"   # sentinel returned when match has no voters
-
-
 def run_points_calculation(match_id: str, tournament_id: str,
-                            winning_option: str):
-    """
-    Dedup votes → check for voters → calculate → save.
-
-    Returns:
-      list[dict]  — point records on success
-      ABANDONED   — sentinel string when no votes exist (caller handles UI)
-
-    When abandoned:
-      - No points written
-      - Missed votes NOT counted (match never happened)
-      - Caller should call mark_match_abandoned() to update match status
-    """
+                            winning_option: str) -> list[dict]:
+    """Dedup votes → delete old points → recalculate → save."""
     _deduplicate_votes(match_id)
-
-    # Check if any votes exist for this match
-    votes = read_table("votes")
-    match_votes = [v for v in votes if v.get("match_id") == match_id]
-    if not match_votes:
-        # No voters — abandon the match, do not calculate points
-        delete_match_points(match_id)   # clear any stale points
-        return ABANDONED
-
     delete_match_points(match_id)
     records = calculate_match_points(match_id, tournament_id, winning_option)
     if records:
