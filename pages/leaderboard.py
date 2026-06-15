@@ -8,6 +8,17 @@ import streamlit as st
 import pandas as pd
 from data.db import get_matches, get_points, get_tournaments, get_all_users
 from utils.streaks import build_leaderboard, leaderboard_heroes
+import re
+
+def _match_label(match_id: str) -> str:
+    """Extract short label: IPL2026-M001 → M1, WC-M12 → M12."""
+    m = re.search(r'M0*(\d+)', match_id, re.IGNORECASE)
+    if m: return f"M{m.group(1)}"
+    m = re.search(r'(\d+)$', match_id)
+    if m: return f"M{int(m.group(1))}"
+    return match_id[-4:]
+
+
 
 
 def show_leaderboard(user: dict):
@@ -94,9 +105,7 @@ def show_leaderboard(user: dict):
     # Rename match columns to short titles (latest first)
     rename_map = {}
     for mid in match_ids_desc:
-        m     = next((x for x in matches_asc if x["match_id"] == mid), None)
-        short = m["title"][:14] if m else mid
-        rename_map[mid] = short
+        rename_map[mid] = _match_label(mid)
     df = df.rename(columns=rename_map)
 
     short_titles = list(rename_map.values())
@@ -124,7 +133,7 @@ def show_leaderboard(user: dict):
         cols = st.columns(min(len(match_ids_desc), 6))
         for i, mid in enumerate(match_ids_desc):
             m = next((x for x in matches_asc if x["match_id"] == mid), None)
-            label = m["title"] if m else mid
+            label = f"{_match_label(mid)} — {m['title']}" if m else mid
             with cols[i % 6]:
                 if st.button(label, key=f"lb_{mid}"):
                     st.session_state["page"]               = "match"
