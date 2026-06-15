@@ -16,18 +16,8 @@ from data.db import (
     update_match_result, delete_match,
     get_votes, delete_vote, get_user_by_id, verify_password
 )
-from data.points import run_points_calculation
-
-import re as _re_d
-
-def _match_lbl(match_id: str) -> str:
-    """Extract short label: IPL2026-M001 → M1."""
-    m = _re_d.search(r'M0*(\d+)', match_id, _re_d.IGNORECASE)
-    if m: return f"M{m.group(1)}"
-    m = _re_d.search(r'(\d+)$', match_id)
-    if m: return f"M{int(m.group(1))}"
-    return match_id[-4:]
-
+from data.points import run_points_calculation, ABANDONED
+from data.db    import mark_match_abandoned
 from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
 )
@@ -508,7 +498,8 @@ def _results_tab():
 
     pending    = [m for m in all_ms if m["status"] != "completed" and not is_voting_open(m)]
     still_open = [m for m in all_ms if m["status"] != "completed" and is_voting_open(m)]
-    done       = [m for m in all_ms if m["status"] == "completed"]
+    done       = [m for m in all_ms
+                   if m["status"] in ("completed", "abandoned")]
 
     FRAME_H = 400   # scrollable frame height
 
@@ -526,15 +517,32 @@ def _results_tab():
                     c1, c2, c3 = st.columns([3, 2, 2])
                     c1.markdown(f"**{m['title']}**")
                     c1.caption(f"`{m['match_id']}`  ·  {m['match_date']} {m['start_time']}  ·  Scoring: **{scoring}**")
-                    winner = c2.selectbox("Winner", opts, key=f"r_{m['match_id']}")
+                    # Options include winner choices + Abandoned
+                    result_opts = opts + ["⛔ Abandoned (no voters)"]
+                    winner_sel  = c2.selectbox("Result", result_opts,
+                                               key=f"r_{m['match_id']}")
+                    is_abandon  = winner_sel == "⛔ Abandoned (no voters)"
                     if c3.button("Save Result", key=f"rb_{m['match_id']}", type="primary"):
-                        with st.spinner("Calculating points..."):
-                            update_match_result(m["match_id"], winner)
-                            records = run_points_calculation(m["match_id"], sel_tid, winner)
-                        correct = sum(1 for r in records if r.get("total_points", 0) > 0)
-                        st.success(f"**{winner}** won — {correct} correct voter(s)")
-                        if email_configured():
-                            _send_result_emails(m, winner, sel_tid, records)
+                        if is_abandon:
+                            mark_match_abandoned(m["match_id"])
+                            st.info(f"**{m['title']}** marked as abandoned — no points calculated.")
+                        else:
+                            with st.spinner("Calculating points..."):
+                                update_match_result(m["match_id"], winner_sel)
+                                result = run_points_calculation(
+                                    m["match_id"], sel_tid, winner_sel)
+                            if result is ABANDONED:
+                                mark_match_abandoned(m["match_id"])
+                                st.warning(
+                                    f"**{m['title']}** — no votes found. "
+                                    "Match marked as abandoned, no points calculated."
+                                )
+                            else:
+                                correct = sum(1 for r in result
+                                              if r.get("total_points", 0) > 0)
+                                st.success(f"**{winner_sel}** won — {correct} correct voter(s)")
+                                if email_configured():
+                                    _send_result_emails(m, winner_sel, sel_tid, result)
                         st.rerun()
 
     st.markdown("")
@@ -569,23 +577,68 @@ def _results_tab():
     else:
         with st.container(border=True, height=FRAME_H):
             for m in done:
-                opts    = [o.strip() for o in m["options"].split("|") if o.strip()]
-                cur_idx = opts.index(m["result"]) if m["result"] in opts else 0
+                opts      = [o.strip() for o in m["options"].split("|") if o.strip()]
+                cur_res   = m.get("result", "")
+                is_aband  = m.get("status") == "abandoned" or cur_res == "abandoned"
+                cur_idx   = opts.index(cur_res) if cur_res in opts else 0
+
                 with st.container(border=True):
-                    c1, c2, c3 = st.columns([3, 2, 2])
+                    c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
                     c1.markdown(f"**{m['title']}**")
-                    c1.caption(f"`{m['match_id']}`  ·  Result: **{m['result']}**  ·  Scoring: **{m.get('scoring_mode','ratio')}**")
-                    new_w = c2.selectbox("Change to", opts, index=cur_idx,
-                                          key=f"corr_{m['match_id']}")
+                    c1.caption(
+                        f"`{m['match_id']}`  ·  "
+                        f"Result: **{'⛔ Abandoned' if is_aband else cur_res}**  ·  "
+                        f"Scoring: **{m.get('scoring_mode','ratio')}**"
+                    )
+
+                    # Column 2: change result dropdown
+                    result_opts = opts + ["⛔ Abandoned (no voters)"]
+                    def_idx     = len(opts) if is_aband else cur_idx
+                    new_w       = c2.selectbox("Change to", result_opts,
+                                               index=def_idx,
+                                               key=f"corr_{m['match_id']}")
+                    new_is_aband = new_w == "⛔ Abandoned (no voters)"
+                    changed      = new_w != (cur_res if not is_aband else "⛔ Abandoned (no voters)")
+
+                    # Column 3: update result
                     if c3.button("Update Result", key=f"corrb_{m['match_id']}",
-                                  type="primary", disabled=(new_w == m["result"])):
-                        with st.spinner("Recalculating..."):
-                            update_match_result(m["match_id"], new_w)
-                            records = run_points_calculation(m["match_id"], sel_tid, new_w)
-                        st.success(f"Updated to **{new_w}** — points recalculated.")
-                        if email_configured():
-                            _send_result_emails(m, new_w, sel_tid, records)
+                                  type="primary", disabled=not changed):
+                        if new_is_aband:
+                            mark_match_abandoned(m["match_id"])
+                            st.info("Match marked as abandoned.")
+                        else:
+                            with st.spinner("Recalculating..."):
+                                update_match_result(m["match_id"], new_w)
+                                records = run_points_calculation(
+                                    m["match_id"], sel_tid, new_w)
+                            if records is ABANDONED:
+                                mark_match_abandoned(m["match_id"])
+                                st.warning("No votes found — marked abandoned.")
+                            else:
+                                st.success(f"Updated to **{new_w}** — points recalculated.")
+                                if email_configured():
+                                    _send_result_emails(m, new_w, sel_tid, records)
                         st.rerun()
+
+                    # Column 4: recalculate points for current result (without changing it)
+                    if not is_aband and cur_res in opts:
+                        if c4.button("🔄 Recalculate", key=f"recalc_{m['match_id']}",
+                                      help="Recalculate points for current result"):
+                            with st.spinner("Recalculating..."):
+                                records = run_points_calculation(
+                                    m["match_id"], sel_tid, cur_res)
+                            if records is ABANDONED:
+                                st.warning("No votes found — no points to calculate.")
+                            else:
+                                correct = sum(1 for r in records
+                                              if r.get("total_points", 0) > 0)
+                                st.success(
+                                    f"Points recalculated for **{m['title']}** — "
+                                    f"{correct} correct voter(s)."
+                                )
+                            st.rerun()
+                    elif is_aband:
+                        c4.caption("⛔ Abandoned")
 
 # ── Email helper ──────────────────────────────────────────────────────────────
 
@@ -648,7 +701,7 @@ def _send_result_emails(match: dict, result: str,
         # Last 5 completed matches — latest first for email columns
         last5        = sorted_matches_asc[-5:]
         last5_ids    = [m["match_id"] for m in reversed(last5)]   # latest first
-        last5_titles = {m["match_id"]: _match_lbl(m["match_id"]) for m in last5}
+        last5_titles = {m["match_id"]: m["title"][:10] for m in last5}
 
         # ── Email 2: leaderboard ──────────────────────────────────────────────
         try:
