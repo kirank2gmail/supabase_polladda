@@ -17,6 +17,17 @@ from data.db import (
     get_votes, delete_vote, get_user_by_id, verify_password
 )
 from data.points import run_points_calculation
+
+import re as _re_d
+
+def _match_lbl(match_id: str) -> str:
+    """Extract short label: IPL2026-M001 → M1."""
+    m = _re_d.search(r'M0*(\d+)', match_id, _re_d.IGNORECASE)
+    if m: return f"M{m.group(1)}"
+    m = _re_d.search(r'(\d+)$', match_id)
+    if m: return f"M{int(m.group(1))}"
+    return match_id[-4:]
+
 from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
 )
@@ -637,7 +648,7 @@ def _send_result_emails(match: dict, result: str,
         # Last 5 completed matches — latest first for email columns
         last5        = sorted_matches_asc[-5:]
         last5_ids    = [m["match_id"] for m in reversed(last5)]   # latest first
-        last5_titles = {m["match_id"]: m["title"][:10] for m in last5}
+        last5_titles = {m["match_id"]: _match_lbl(m["match_id"]) for m in last5}
 
         # ── Email 2: leaderboard ──────────────────────────────────────────────
         try:
