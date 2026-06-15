@@ -208,18 +208,27 @@ def _poll_summary(match, options, voting_open, is_admin):
         bar       = "█" * (pct // 5) + "░" * (20 - pct // 5)
         st.markdown(f"`{opt:<22} {bar}  {pct}%  ({count} votes)`")
 
-        if is_admin and opt_votes:
-            with st.expander(f"Voters for {opt} — admin"):
+        # Show individual voters when poll is closed (voting_open=False)
+        # or when admin views — admin also gets the delete button
+        if opt_votes and (not voting_open or is_admin):
+            expander_label = (f"Voters for {opt} — admin"
+                              if is_admin else f"Who voted {opt}")
+            with st.expander(expander_label, expanded=not voting_open):
                 for v in opt_votes:
                     dname = umap.get(v["user_id"], v["user_id"])
-                    c1, c2, c3 = st.columns([3, 3, 1])
-                    c1.markdown(f"👤 **{dname}**")
-                    c2.caption(f"voted {v.get('voted_at','')[:16]}")
-                    if c3.button("🗑️", key=f"dv_{v['vote_id']}",
-                                  help=f"Delete {dname}'s vote"):
-                        delete_vote(v["user_id"], match["match_id"])
-                        st.success(f"Vote by **{dname}** deleted.")
-                        st.rerun()
+                    if is_admin:
+                        c1, c2, c3 = st.columns([3, 3, 1])
+                        c1.markdown(f"👤 **{dname}**")
+                        c2.caption(f"voted {v.get('voted_at','')[:16]}")
+                        if c3.button("🗑️", key=f"dv_{v['vote_id']}",
+                                      help=f"Delete {dname}'s vote"):
+                            delete_vote(v["user_id"], match["match_id"])
+                            st.success(f"Vote by **{dname}** deleted.")
+                            st.rerun()
+                    else:
+                        c1, c2 = st.columns([3, 3])
+                        c1.markdown(f"👤 **{dname}**")
+                        c2.caption(f"voted {v.get('voted_at','')[:16]}")
 
 
 # ── Result breakdown ──────────────────────────────────────────────────────────
