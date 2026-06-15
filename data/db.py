@@ -214,6 +214,14 @@ def update_match_result(match_id: str, result: str):
         lambda r: r["match_id"] == match_id,
         lambda r: r.update({"result": result, "status": "completed"}))
 
+def mark_match_abandoned(match_id: str):
+    """No voters — mark as abandoned. No points calculated, misses not counted."""
+    _update_where("matches",
+        lambda r: r["match_id"] == match_id,
+        lambda r: r.update({"result": "abandoned", "status": "abandoned"}))
+    # Clear any previously calculated points for this match
+    _delete_where("points", lambda r: r["match_id"] == match_id)
+
 def delete_match(match_id: str):
     for table in ("matches", "votes", "points"):
         _delete_where(table, lambda r, m=match_id: r["match_id"] == m)
