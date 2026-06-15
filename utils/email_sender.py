@@ -8,6 +8,17 @@ Each email has:
 """
 
 import smtplib
+
+import re as _re
+
+def _match_label_e(match_id: str) -> str:
+    """Extract short label: IPL2026-M001 → M1, WC-M12 → M12."""
+    m = _re.search(r'M0*(\d+)', match_id, _re.IGNORECASE)
+    if m: return f"M{m.group(1)}"
+    m = _re.search(r'(\d+)$', match_id)
+    if m: return f"M{int(m.group(1))}"
+    return match_id[-4:]
+
 import io
 from email.mime.multipart import MIMEMultipart
 from email.mime.text      import MIMEText
@@ -347,7 +358,7 @@ def _build_lb_png(match: dict, result: str,
                   last5_titles: dict,
                   tournament_name: str) -> bytes:
 
-    m_hdrs   = [last5_titles.get(mid, mid[-6:]).split(" — ")[0] for mid in last5_match_ids]
+    m_hdrs   = [_match_label_e(mid) for mid in last5_match_ids]
     headers  = ["#", "Player", "Points", "Win%", "Missed"] + m_hdrs
     rows     = []
     bgs      = []
@@ -387,7 +398,7 @@ def send_leaderboard(match: dict, result: str,
                      last5_titles: dict,
                      tournament_name: str):
 
-    m_hdrs    = "".join(f"<th>{last5_titles.get(mid,mid[-6:]).split(' — ')[0]}</th>"
+    m_hdrs    = "".join(f"<th>{_match_label_e(mid)}</th>"
                         for mid in last5_match_ids)
     medals    = ["🥇","🥈","🥉"]
     rows_html = ""
