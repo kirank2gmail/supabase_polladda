@@ -53,20 +53,22 @@ def _declare():
     return stc.declare_component("sportspoll_session", path=_COMP_DIR)
 
 
-def _run_component(cmd: str = "read", value: str = "") -> str | None:
-    comp = _declare()
-    return comp(cmd=cmd, value=value, key=_COMP_KEY, default=None)
-
-
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def load_session_cookie() -> str | None:
     """
-    Read localStorage and return user_id if session is valid.
-    Returns None on first run (component not yet mounted) — Streamlit
-    will auto-rerun once the component sends its value.
+    Render the component once per run (read mode).
+    Result cached in session_state so save/clear don't re-render it.
+    Returns user_id if valid session exists, else None.
     """
-    raw = _run_component(cmd="read")
+    # Only render the read component once per script run
+    if "_sess_raw" not in st.session_state:
+        comp = _declare()
+        raw  = comp(cmd="read", value="", key="sess_read", default=None)
+        st.session_state["_sess_raw"] = raw or ""
+    else:
+        raw = st.session_state["_sess_raw"]
+
     if not raw:
         return None
     try:
@@ -83,13 +85,18 @@ def load_session_cookie() -> str | None:
 
 
 def save_session_cookie(user_id: str):
-    """Write encrypted session to localStorage. Call after successful login."""
+    """Write encrypted session to localStorage after successful login."""
     expires = (datetime.now(timezone.utc) + timedelta(days=COOKIE_DAYS)).isoformat()
     payload = json.dumps({"user_id": user_id, "expires": expires})
     token   = _encrypt(payload)
-    _run_component(cmd="set", value=token)
+    comp    = _declare()
+    comp(cmd="set", value=token, key="sess_set", default=None)
+    # Cache the new value so subsequent reads in same run are consistent
+    st.session_state["_sess_raw"] = token
 
 
 def clear_session_cookie():
-    """Clear localStorage session. Call on sign-out."""
-    _run_component(cmd="clear")
+    """Clear localStorage session on sign-out."""
+    comp = _declare()
+    comp(cmd="clear", value="", key="sess_clear", default=None)
+    st.session_state.pop("_sess_raw", None)
