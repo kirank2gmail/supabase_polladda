@@ -101,8 +101,14 @@ def build_leaderboard(points: list[dict],
         }
 
         # Per-match columns using desc order (latest first)
-        pts_by_match = {p["match_id"]: p for p in pts_list}
+        pts_by_match  = {p["match_id"]: p for p in pts_list}
+        abandoned_ids = {m["match_id"] for m in matches_asc
+                         if m.get("status") == "abandoned"
+                         or m.get("result") == "abandoned"}
         for mid in match_ids_desc:
+            if mid in abandoned_ids:
+                row[mid] = "A"          # abandoned — uniform for all players
+                continue
             p = pts_by_match.get(mid)
             if p is None:
                 row[mid] = None
