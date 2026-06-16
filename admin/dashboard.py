@@ -498,8 +498,7 @@ def _results_tab():
 
     pending    = [m for m in all_ms if m["status"] != "completed" and not is_voting_open(m)]
     still_open = [m for m in all_ms if m["status"] != "completed" and is_voting_open(m)]
-    done       = [m for m in all_ms
-                   if m["status"] in ("completed", "abandoned")]
+    done       = [m for m in all_ms if m["status"] in ("completed", "abandoned")]
 
     FRAME_H = 400   # scrollable frame height
 
@@ -523,7 +522,6 @@ def _results_tab():
                             update_match_result(m["match_id"], winner)
                             records = run_points_calculation(m["match_id"], sel_tid, winner)
                         if records is ABANDONED:
-                            # No votes found — auto-abandon, no points
                             mark_match_abandoned(m["match_id"])
                             st.warning(
                                 f"**{m['title']}** has no votes — "
@@ -562,7 +560,7 @@ def _results_tab():
 
     # ── 3. Update / Correct Result ────────────────────────────────────────────
     st.subheader("✏️ Update / Correct Result")
-    st.caption("Change result to recalculate all points.")
+    st.caption("Change result or recalculate points for a match.")
     if not done:
         st.caption("No completed matches.")
     else:
@@ -575,19 +573,20 @@ def _results_tab():
 
                 with st.container(border=True):
                     c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
-                    c1.markdown(f"**{m['title']}**")
-                    c1.caption(
-                        f"`{m['match_id']}`  ·  "
-                        f"Result: **{'⛔ Abandoned' if is_aband else cur_res}**  ·  "
-                        f"Scoring: **{m.get('scoring_mode','ratio')}**"
-                    )
 
-                    # Column 2: change result dropdown (winner options only)
+                    with c1:
+                        st.markdown(f"**{m['title']}**")
+                        if is_aband:
+                            st.caption(f"`{m['match_id']}`  ·  ⛔ Abandoned  ·  Scoring: **{m.get('scoring_mode','ratio')}**")
+                        else:
+                            st.caption(f"`{m['match_id']}`  ·  Result: **{cur_res}**  ·  Scoring: **{m.get('scoring_mode','ratio')}**")
+
+                    # c2: change result dropdown
                     new_w   = c2.selectbox("Change to", opts, index=cur_idx,
                                            key=f"corr_{m['match_id']}")
-                    changed = new_w != cur_res or is_aband  # allow un-abandoning
+                    changed = new_w != cur_res or is_aband
 
-                    # Column 3: update result
+                    # c3: update result button
                     if c3.button("Update Result", key=f"corrb_{m['match_id']}",
                                   type="primary", disabled=not changed):
                         with st.spinner("Recalculating..."):
@@ -603,25 +602,34 @@ def _results_tab():
                                 _send_result_emails(m, new_w, sel_tid, records)
                         st.rerun()
 
-                    # Column 4: recalculate points for current result (without changing it)
-                    if not is_aband and cur_res in opts:
-                        if c4.button("🔄 Recalculate", key=f"recalc_{m['match_id']}",
-                                      help="Recalculate points for current result"):
-                            with st.spinner("Recalculating..."):
-                                records = run_points_calculation(
-                                    m["match_id"], sel_tid, cur_res)
-                            if records is ABANDONED:
-                                st.warning("No votes found — no points to calculate.")
-                            else:
-                                correct = sum(1 for r in records
-                                              if r.get("total_points", 0) > 0)
-                                st.success(
-                                    f"Points recalculated for **{m['title']}** — "
-                                    f"{correct} correct voter(s)."
-                                )
-                            st.rerun()
-                    elif is_aband:
-                        c4.caption("⛔ Abandoned")
+                    # c4: recalculate points for current result (no result change)
+                    # Also handles clearing missed-vote records for abandoned matches
+                    with c4:
+                        if is_aband:
+                            st.caption("⛔ Abandoned")
+                        else:
+                            if st.button("🔄 Recalculate", key=f"recalc_{m['match_id']}",
+                                          help="Recalculate points using current result "
+                                               "and current votes. Clears stale records."):
+                                with st.spinner("Recalculating..."):
+                                    records = run_points_calculation(
+                                        m["match_id"], sel_tid, cur_res)
+                                if records is ABANDONED:
+                                    # No votes exist — clear all points and missed records
+                                    mark_match_abandoned(m["match_id"])
+                                    st.warning(
+                                        "No votes found for this match — "
+                                        "points and missed records cleared. "
+                                        "Marked as abandoned."
+                                    )
+                                else:
+                                    correct = sum(1 for r in records
+                                                  if r.get("total_points", 0) > 0)
+                                    st.success(
+                                        f"Points recalculated — "
+                                        f"{correct} correct voter(s)."
+                                    )
+                                st.rerun()
 
 # ── Email helper ──────────────────────────────────────────────────────────────
 
