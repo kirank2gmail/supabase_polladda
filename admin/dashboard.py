@@ -17,6 +17,7 @@ from data.db import (
     get_votes, delete_vote, get_user_by_id, verify_password
 )
 from data.points import run_points_calculation, ABANDONED
+from data.gcs import read_table as _read_gcs
 from data.db    import mark_match_abandoned
 from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
@@ -72,13 +73,14 @@ def _validate_options(s: str) -> tuple[bool, str]:
 def show_admin(user: dict):
     st.title("⚙️ Admin Panel")
     st.caption(f"Logged in as **{get_display_name(user['user_id'])}**")
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "👥 Users", "🏆 Tournaments", "📋 Matches", "🎯 Results"
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "👥 Users", "🏆 Tournaments", "📋 Matches", "🎯 Results", "📋 Activity Log"
     ])
     with tab1: _users_tab(user)
     with tab2: _tournaments_tab(user)
     with tab3: _matches_tab(user)
     with tab4: _results_tab()
+    with tab5: _activity_tab()
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -740,3 +742,104 @@ def _send_result_emails(match: dict, result: str,
 
     except Exception as e:
         st.warning(f"Email preparation failed: {e}")
+
+
+# ── Activity Log ──────────────────────────────────────────────────────────────
+
+def _activity_tab():
+    import pandas as pd
+    from datetime import datetime, timezone
+    import pytz
+
+    st.subheader("📋 Activity Log")
+
+    logs = _read_gcs("activity_log")
+    if not logs:
+        st.caption("No activity recorded yet.")
+        return
+
+    # Controls
+    c1, c2, c3 = st.columns([2, 2, 1])
+
+    # Filter by event type
+    event_types = ["All"] + sorted({r.get("event","") for r in logs})
+    sel_event   = c1.selectbox("Filter by event", event_types, key="act_evt")
+
+    # Filter by user
+    user_names  = ["All"] + sorted({r.get("user_name","") for r in logs})
+    sel_user    = c2.selectbox("Filter by user", user_names, key="act_usr")
+
+    # Latest N
+    limit = c3.number_input("Show last", min_value=10, max_value=1000,
+                             value=100, step=10, key="act_lim")
+
+    # Apply filters
+    filtered = list(reversed(logs))   # newest first
+    if sel_event != "All":
+        filtered = [r for r in filtered if r.get("event") == sel_event]
+    if sel_user != "All":
+        filtered = [r for r in filtered if r.get("user_name") == sel_user]
+    filtered = filtered[:int(limit)]
+
+    st.caption(f"Showing {len(filtered)} records")
+
+    # Build display rows
+    rows = []
+    for r in filtered:
+        ts  = r.get("timestamp","")
+        # Format timestamp
+        try:
+            dt  = datetime.fromisoformat(ts)
+            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+            dt  = dt.astimezone(pytz.timezone("Asia/Kolkata"))
+            ts  = dt.strftime("%d %b %Y  %H:%M  IST")
+        except Exception:
+            pass
+
+        evt      = r.get("event","")
+        details  = r.get("details", {})
+
+        # Build human-readable detail string
+        if evt == "login":
+            detail = "Signed in"
+        elif evt == "logout":
+            dur = details.get("duration_mins")
+            detail = f"Signed out  (session: {dur} min)" if dur else "Signed out"
+        elif evt == "vote_cast":
+            detail = (f"Voted  {details.get('vote','')}  "
+                      f"on {details.get('match_title',details.get('match_id',''))}")
+        elif evt == "vote_changed":
+            detail = (f"Changed vote  "
+                      f"{details.get('old_vote','')} → {details.get('new_vote','')}  "
+                      f"on {details.get('match_title',details.get('match_id',''))}")
+        else:
+            detail = str(details)
+
+        rows.append({
+            "Time"    : ts,
+            "User"    : r.get("user_name",""),
+            "Event"   : evt,
+            "Detail"  : detail,
+        })
+
+    if rows:
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True,
+                     column_config={
+                         "Time"  : st.column_config.TextColumn("Time",   width="medium"),
+                         "User"  : st.column_config.TextColumn("User",   width="small"),
+                         "Event" : st.column_config.TextColumn("Event",  width="small"),
+                         "Detail": st.column_config.TextColumn("Detail", width="large"),
+                     })
+
+    # Download as CSV
+    if rows:
+        import io
+        csv = pd.DataFrame(rows).to_csv(index=False)
+        st.download_button(
+            "⬇️ Download CSV",
+            data       = csv,
+            file_name  = "activity_log.csv",
+            mime       = "text/csv",
+            key        = "act_download",
+        )
