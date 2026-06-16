@@ -234,16 +234,34 @@ def run_points_calculation(match_id: str, tournament_id: str,
                             winning_option: str):
     """
     Dedup votes → check for voters → calculate → save.
-    Returns ABANDONED sentinel (string) if no votes exist.
+
+    If no votes exist:
+      - Deletes ALL point records for this match (including any stale miss records
+        that may have been saved in a previous calculation)
+      - Marks match as abandoned in the matches table
+      - Returns ABANDONED sentinel
+
     Returns list[dict] of point records on success.
     """
     _deduplicate_votes(match_id)
+
     # Check if any votes exist for this match
     match_votes = [v for v in read_table("votes")
                    if v.get("match_id") == match_id]
+
     if not match_votes:
-        delete_match_points(match_id)   # clear any stale points
+        # Delete ALL point records for this match — including any previously
+        # saved miss/penalty records so leaderboard missed count is correct
+        delete_match_points(match_id)
+        # Update match status to abandoned directly here
+        matches = read_table("matches")
+        for m in matches:
+            if m["match_id"] == match_id:
+                m["result"] = "abandoned"
+                m["status"] = "abandoned"
+        write_table("matches", matches)
         return ABANDONED
+
     delete_match_points(match_id)
     records = calculate_match_points(match_id, tournament_id, winning_option)
     if records:
