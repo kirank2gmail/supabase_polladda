@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head><style>body{margin:0;padding:0;overflow:hidden;}</style></head>
+<body>
+<script>
+(function() {
+    const STORAGE_KEY = "sportspoll_sess";
+    let isReady = false;
+
+    // Tell Streamlit this component is ready
+    function sendReady() {
+        window.parent.postMessage({
+            isStreamlitMessage: true,
+            type: "streamlit:componentReady",
+            apiVersion: 1
+        }, "*");
+    }
+
+    // Send a value back to Python
+    function sendValue(val) {
+        window.parent.postMessage({
+            isStreamlitMessage: true,
+            type: "streamlit:setComponentValue",
+            value: val === null ? "" : val
+        }, "*");
+    }
+
+    // Handle messages from Python (via component args)
+    window.addEventListener("message", function(e) {
+        if (!e.data || !e.data.isStreamlitMessage) return;
+
+        if (e.data.type === "streamlit:render") {
+            var args = e.data.args || {};
+            var cmd  = args.cmd || "read";
+
+            if (cmd === "set" && args.value) {
+                localStorage.setItem(STORAGE_KEY, args.value);
+                sendValue(args.value);
+            } else if (cmd === "clear") {
+                localStorage.removeItem(STORAGE_KEY);
+                sendValue("");
+            } else {
+                // read
+                sendValue(localStorage.getItem(STORAGE_KEY) || "");
+            }
+        }
+    });
+
+    // Start
+    sendReady();
+})();
+</script>
+</body>
+</html>
