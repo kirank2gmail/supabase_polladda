@@ -36,7 +36,9 @@ def show_leaderboard(user: dict):
     sel_tid  = t_ids[t_names.index(sel_name)]
 
     points  = get_points(tournament_id=sel_tid)
-    matches = get_matches(tournament_id=sel_tid, status="completed")
+    # Include both completed and abandoned matches for column display
+    matches = [m for m in get_matches(tournament_id=sel_tid)
+               if m["status"] in ("completed", "abandoned")]
     users   = get_all_users()
 
     if not points:
@@ -147,6 +149,7 @@ def show_leaderboard(user: dict):
 
 def _fmt_cell(val) -> str:
     if val is None or val == "": return "—"
+    if val == "A":               return "🚫 A"   # abandoned
     if val == "miss":            return "⚠️"
     if isinstance(val, str) and val.startswith("−"):
         return f"❌ {val}"
