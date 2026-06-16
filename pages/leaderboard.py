@@ -133,15 +133,7 @@ def show_leaderboard(user: dict):
     df.to_csv(csv_buf, index=False)
     csv_bytes = csv_buf.getvalue().encode()
 
-    tc1, tc2, tc3 = st.columns([4, 1, 1])
-    tc1.markdown("### 📊 Leaderboard")
-    tc2.download_button(
-        "⬇️ CSV", data=csv_bytes,
-        file_name=f"leaderboard_{sel_tid}.csv",
-        mime="text/csv",
-        use_container_width=True,
-        key="lb_download"
-    )
+    st.markdown("### 📊 Leaderboard")
 
     # ── Build HTML table ──────────────────────────────────────────────────────
     m_labels = [_match_label(mid) for mid in match_ids_desc]
@@ -221,6 +213,13 @@ def show_leaderboard(user: dict):
     </div>
     """
     st.html(table_html)
+
+    st.download_button(
+        "⬇️ Download CSV", data=csv_bytes,
+        file_name=f"leaderboard_{sel_tid}.csv",
+        mime="text/csv",
+        key="lb_download"
+    )
 
     # ── Match Details — bordered frame, 6 per row ──────────────────────────────
     if match_ids_desc:
