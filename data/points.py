@@ -62,55 +62,53 @@ def _count_prior_misses(user_id: str, match_id: str,
     """
     Count matches this user missed BEFORE match_id in this tournament.
 
-    Rules:
-      - Only non-abandoned completed matches are considered.
-      - Only matches where the user already has a points record are counted.
-        This prevents counting matches that were completed before the user
-        first participated (e.g. joined mid-tournament), which would
-        incorrectly inflate the miss count and trigger early penalties.
-      - Player with zero points records has zero misses.
+    Key fix: counts ALL tournament matches (any status) before this match,
+    not just completed ones. This ensures accuracy when results are entered
+    out of chronological order — earlier missed matches are still counted
+    even if their results haven't been entered yet.
+
+    Abandoned matches excluded. Counts only from player's first voted match.
     """
-    # Exclude abandoned matches from miss counting
-    all_matches = [m for m in _get_matches(tournament_id=tournament_id,
-                                            status="completed")
+    # All non-abandoned matches in tournament regardless of status
+    all_matches = [m for m in _get_matches(tournament_id=tournament_id)
                    if m.get("result") != "abandoned"
                    and m.get("status") != "abandoned"]
 
-    all_votes  = _get_votes(tournament_id=tournament_id)
     this_match = next((m for m in all_matches
                        if m["match_id"] == match_id), None)
     if not this_match:
         return 0
 
-    this_dt   = f"{this_match['match_date']} {this_match['start_time']}"
+    this_dt    = f"{this_match['match_date']} {this_match['start_time']}"
+    all_votes  = _get_votes(tournament_id=tournament_id)
     user_votes = [v for v in all_votes if v["user_id"] == user_id]
     voted_ids  = {v["match_id"] for v in user_votes}
 
-    # Only count matches where the user already has a points record.
-    # This anchors miss counting to matches the user was actually tracked in,
-    # ignoring any completed matches before their first participation.
-    tracked_match_ids = {
-        p["match_id"] for p in read_table("points")
-        if p["tournament_id"] == tournament_id
-        and p["user_id"] == user_id
-    }
+    if not voted_ids:
+        return 0   # never voted — no misses
 
-    if not tracked_match_ids:
-        return 0   # no points records yet — no misses
+    # Find the player's first voted match date+time
+    voted_match_dts = [
+        f"{m['match_date']} {m['start_time']}"
+        for m in all_matches if m["match_id"] in voted_ids
+    ]
+    if not voted_match_dts:
+        return 0
+
+    first_vote_dt = min(voted_match_dts)
 
     # Count matches that:
-    #   1. Are tracked for this user (they were participating)
-    #   2. Start before this match
+    #   1. Started strictly AFTER the player's first voted match
+    #      (matches before first vote don't count — player wasn't participating)
+    #   2. Started strictly BEFORE this match
     #   3. Player did not vote in
     return sum(
         1 for m in all_matches
         if m["match_id"] != match_id
+        and f"{m['match_date']} {m['start_time']}" > first_vote_dt
         and f"{m['match_date']} {m['start_time']}" < this_dt
         and m["match_id"] not in voted_ids
-        and m["match_id"] in tracked_match_ids
     )
-
-
 def calculate_match_points(match_id: str, tournament_id: str,
                             winning_option: str) -> list[dict]:
     tournament = _get_tournament(tournament_id)
