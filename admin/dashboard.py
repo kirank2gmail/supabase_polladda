@@ -577,7 +577,6 @@ def _results_tab():
                     winner = c2.selectbox("Winner", opts, key=f"r_{m['match_id']}")
                     if c3.button("Save Result", key=f"rb_{m['match_id']}", type="primary"):
                         with st.spinner("Calculating points..."):
-                            update_match_result(m["match_id"], winner)
                             records = run_points_calculation(m["match_id"], sel_tid, winner)
                         if records is ABANDONED:
                             mark_match_abandoned(m["match_id"])
@@ -586,6 +585,7 @@ def _results_tab():
                                 "automatically marked as abandoned. No points calculated."
                             )
                         else:
+                            update_match_result(m["match_id"], winner)
                             correct = sum(1 for r in records if r.get("total_points", 0) > 0)
                             st.success(f"**{winner}** won — {correct} correct voter(s)")
                             if email_configured():
@@ -652,15 +652,16 @@ def _results_tab():
                     if c3.button("Update Result", key=f"corrb_{m['match_id']}",
                                   type="primary", disabled=not changed):
                         with st.spinner("Recalculating..."):
-                            update_match_result(m["match_id"], new_w)
                             records = run_points_calculation(
                                 m["match_id"], sel_tid, new_w)
                         if records is ABANDONED:
+                            mark_match_abandoned(m["match_id"])
                             st.warning(
                                 f"**{m['title']}** has no votes — "
                                 "marked as abandoned. No points calculated."
                             )
                         else:
+                            update_match_result(m["match_id"], new_w)
                             st.success(f"Updated to **{new_w}** — points recalculated.")
                             if email_configured():
                                 _send_result_emails(m, new_w, sel_tid, records)
