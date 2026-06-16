@@ -5,3 +5,4 @@ python-dateutil
 google-cloud-storage
 google-auth
 Pillow
+cryptography
