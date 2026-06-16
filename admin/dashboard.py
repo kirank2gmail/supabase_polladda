@@ -484,6 +484,39 @@ def _single_form(tid: str, user: dict):
 
 # ── Results ───────────────────────────────────────────────────────────────────
 
+def _recalculate_tournament(sel_tid: str):
+    """
+    Recalculate points for ALL completed/abandoned matches in a tournament
+    in chronological order. Abandoned matches (no votes) are detected
+    automatically and marked accordingly.
+    Returns tuple (recalc_count, abandoned_count, error_count).
+    """
+    all_ms = get_matches(sel_tid)
+    done   = sorted(
+        [m for m in all_ms if m["status"] in ("completed", "abandoned")
+         and m.get("result") not in ("", None)],
+        key=lambda m: m["match_date"] + " " + m["start_time"]
+    )
+    recalc = abandoned = errors = 0
+    for m in done:
+        if m.get("status") == "abandoned" and m.get("result") == "abandoned":
+            # Already abandoned — just clear stale points
+            from data.db import delete_match_points as _dmp
+            _dmp(m["match_id"])
+            abandoned += 1
+            continue
+        try:
+            result = run_points_calculation(
+                m["match_id"], sel_tid, m.get("result", ""))
+            if result is ABANDONED:
+                abandoned += 1
+            else:
+                recalc += 1
+        except Exception:
+            errors += 1
+    return recalc, abandoned, errors
+
+
 def _results_tab():
     ts = get_tournaments()
     if not ts: st.warning("No tournaments found."); return
@@ -496,11 +529,36 @@ def _results_tab():
     all_ms     = get_matches(sel_tid)
     if not all_ms: st.info("No matches yet."); return
 
-    pending    = [m for m in all_ms if m["status"] != "completed" and not is_voting_open(m)]
-    still_open = [m for m in all_ms if m["status"] != "completed" and is_voting_open(m)]
+    pending    = [m for m in all_ms
+                  if m["status"] not in ("completed", "abandoned")
+                  and not is_voting_open(m)]
+    still_open = [m for m in all_ms
+                  if m["status"] not in ("completed", "abandoned")
+                  and is_voting_open(m)]
     done       = [m for m in all_ms if m["status"] in ("completed", "abandoned")]
 
     FRAME_H = 400   # scrollable frame height
+
+    # ── Tournament-level Recalculate ──────────────────────────────────────────
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 1])
+        c1.markdown("**🔄 Recalculate All Points**")
+        c1.caption(
+            "Recalculates points for every completed match in this tournament "
+            "in chronological order. Use after correcting votes or when a "
+            "new player joins mid-tournament."
+        )
+        if c2.button("Recalculate Tournament", type="primary",
+                     key="recalc_all", use_container_width=True):
+            with st.spinner(f"Recalculating all matches in {sel_n}..."):
+                ok, ab, err = _recalculate_tournament(sel_tid)
+            msg = f"Done — {ok} match(es) recalculated"
+            if ab: msg += f", {ab} abandoned (no votes)"
+            if err: msg += f", {err} error(s)"
+            st.success(msg)
+            st.rerun()
+
+    st.markdown("")
 
     # ── 1. Awaiting Result Entry ───────────────────────────────────────────────
     st.subheader("🎯 Awaiting Result Entry")
@@ -522,6 +580,7 @@ def _results_tab():
                             update_match_result(m["match_id"], winner)
                             records = run_points_calculation(m["match_id"], sel_tid, winner)
                         if records is ABANDONED:
+                            mark_match_abandoned(m["match_id"])
                             st.warning(
                                 f"**{m['title']}** has no votes — "
                                 "automatically marked as abandoned. No points calculated."
@@ -559,33 +618,37 @@ def _results_tab():
 
     # ── 3. Update / Correct Result ────────────────────────────────────────────
     st.subheader("✏️ Update / Correct Result")
-    st.caption("Change result or recalculate points for a match.")
+    st.caption("Change the result for a match — points are recalculated automatically.")
     if not done:
         st.caption("No completed matches.")
     else:
         with st.container(border=True, height=FRAME_H):
             for m in done:
-                opts      = [o.strip() for o in m["options"].split("|") if o.strip()]
-                cur_res   = m.get("result", "")
-                is_aband  = m.get("status") == "abandoned" or cur_res == "abandoned"
-                cur_idx   = opts.index(cur_res) if cur_res in opts else 0
+                opts     = [o.strip() for o in m["options"].split("|") if o.strip()]
+                cur_res  = m.get("result", "")
+                is_aband = m.get("status") == "abandoned" or cur_res == "abandoned"
+                cur_idx  = opts.index(cur_res) if cur_res in opts else 0
 
                 with st.container(border=True):
-                    c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+                    c1, c2, c3 = st.columns([3, 2, 2])
 
                     with c1:
                         st.markdown(f"**{m['title']}**")
                         if is_aband:
-                            st.caption(f"`{m['match_id']}`  ·  ⛔ Abandoned  ·  Scoring: **{m.get('scoring_mode','ratio')}**")
+                            st.caption(
+                                f"`{m['match_id']}`  ·  ⛔ Abandoned  ·  "
+                                f"Scoring: **{m.get('scoring_mode','ratio')}**"
+                            )
                         else:
-                            st.caption(f"`{m['match_id']}`  ·  Result: **{cur_res}**  ·  Scoring: **{m.get('scoring_mode','ratio')}**")
+                            st.caption(
+                                f"`{m['match_id']}`  ·  Result: **{cur_res}**  ·  "
+                                f"Scoring: **{m.get('scoring_mode','ratio')}**"
+                            )
 
-                    # c2: change result dropdown
                     new_w   = c2.selectbox("Change to", opts, index=cur_idx,
                                            key=f"corr_{m['match_id']}")
                     changed = new_w != cur_res or is_aband
 
-                    # c3: update result button
                     if c3.button("Update Result", key=f"corrb_{m['match_id']}",
                                   type="primary", disabled=not changed):
                         with st.spinner("Recalculating..."):
@@ -595,39 +658,13 @@ def _results_tab():
                         if records is ABANDONED:
                             st.warning(
                                 f"**{m['title']}** has no votes — "
-                                "marked as abandoned. Leaderboard updated."
+                                "marked as abandoned. No points calculated."
                             )
                         else:
                             st.success(f"Updated to **{new_w}** — points recalculated.")
                             if email_configured():
                                 _send_result_emails(m, new_w, sel_tid, records)
                         st.rerun()
-
-                    # c4: recalculate points for current result (no result change)
-                    # Also handles clearing missed-vote records for abandoned matches
-                    with c4:
-                        if is_aband:
-                            st.caption("⛔ Abandoned")
-                        else:
-                            if st.button("🔄 Recalculate", key=f"recalc_{m['match_id']}",
-                                          help="Recalculate points using current result "
-                                               "and current votes. Clears stale records."):
-                                with st.spinner("Recalculating..."):
-                                    records = run_points_calculation(
-                                        m["match_id"], sel_tid, cur_res)
-                                if records is ABANDONED:
-                                    st.warning(
-                                        f"**{m['title']}** has no votes — "
-                                        "marked as abandoned. Missed counts cleared."
-                                    )
-                                else:
-                                    correct = sum(1 for r in records
-                                                  if r.get("total_points", 0) > 0)
-                                    st.success(
-                                        f"Points recalculated — "
-                                        f"{correct} correct voter(s)."
-                                    )
-                                st.rerun()
 
 # ── Email helper ──────────────────────────────────────────────────────────────
 
