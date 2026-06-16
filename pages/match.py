@@ -9,6 +9,7 @@ from data.db import (
     get_match, get_matches, get_user_vote, cast_vote, update_vote,
     get_votes, delete_vote, get_points, get_all_users, get_display_name
 )
+from data.activity_log import log_vote_cast, log_vote_changed
 from utils.timezone import (
     is_voting_open, format_match_times, format_countdown, format_ts
 )
@@ -167,9 +168,14 @@ def _submit_vote(user_id, match, option, existing):
             st.warning(f"Already voted for {option}.")
             return
         update_vote(user_id, match["match_id"], option)
+        log_vote_changed(user_id, match["match_id"], match["title"],
+                         match["tournament_id"],
+                         old_vote=existing["vote"], new_vote=option)
         st.success(f"Vote updated to **{option}** ✅")
     else:
         cast_vote(user_id, match["match_id"], match["tournament_id"], option)
+        log_vote_cast(user_id, match["match_id"], match["title"],
+                      match["tournament_id"], vote=option)
         st.success(f"Vote cast for **{option}** ✅")
     st.rerun()
 
