@@ -87,9 +87,15 @@ def show_home(user: dict):
         st.caption("No completed matches yet.")
     else:
         completed_desc = list(reversed(completed))   # newest first
+        # Fetch votes and points ONCE for the user — not per card
+        from data.db import get_votes, get_points as _get_pts
+        user_votes_all = get_votes(tournament_id=sel_tid)
+        user_pts_all   = _get_pts(tournament_id=sel_tid, user_id=user["user_id"])
         with st.container(border=True, height=FRAME_HEIGHT):
             for idx, m in enumerate(completed_desc):
-                _card_completed(m, user["user_id"], user_tz, sel_tid, all_matches)
+                _card_completed(m, user["user_id"], user_tz,
+                                sel_tid, all_matches,
+                                user_votes_all, user_pts_all)
                 if idx < n_done - 1:
                     st.divider()
 
@@ -163,12 +169,20 @@ def _card_in_progress(m, user_id, user_tz, tournament_id, all_matches):
             _go_match(m["match_id"], tournament_id, all_matches)
 
 
-def _card_completed(m, user_id, user_tz, tournament_id, all_matches):
-    existing = get_user_vote(user_id, m["match_id"])
+def _card_completed(m, user_id, user_tz, tournament_id, all_matches,
+                    user_votes_all=None, user_pts_all=None):
+    # Use pre-fetched data if provided, else fetch individually
+    if user_votes_all is not None:
+        existing = next((v for v in user_votes_all
+                         if v["user_id"] == user_id
+                         and v["match_id"] == m["match_id"]), None)
+    else:
+        existing = get_user_vote(user_id, m["match_id"])
+
     result   = m.get("result", "")
     times    = format_match_times(m, user_tz)
 
-    pts_list = get_points(user_id=user_id)
+    pts_list = user_pts_all if user_pts_all is not None else get_points(user_id=user_id)
     pts      = next((float(p.get("total_points", 0)) for p in pts_list
                      if p["match_id"] == m["match_id"]), 0.0)
 
