@@ -149,7 +149,7 @@ def show_leaderboard(user: dict):
 
 def _fmt_cell(val) -> str:
     if val is None or val == "": return "—"
-    if val == "A":               return "🚫 A"   # abandoned
+    if val == "A":               return "🚫"     # abandoned
     if val == "miss":            return "⚠️"
     if isinstance(val, str) and val.startswith("−"):
         return f"❌ {val}"
