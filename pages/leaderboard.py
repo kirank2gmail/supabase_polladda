@@ -99,13 +99,49 @@ def show_leaderboard(user: dict):
                 st.caption(f"{hm['value']} missed")
 
     st.markdown("---")
-    st.markdown("### 📊 Leaderboard")
-    st.caption("Sorted by total points · Latest match first · "
-               "<span style='background:#d1f0d7;padding:1px 6px;border-radius:3px;font-size:12px'>Win</span> &nbsp;"
-               "<span style='background:#fcd7d7;padding:1px 6px;border-radius:3px;font-size:12px'>Loss</span> &nbsp;"
-               "<span style='background:#fff3cd;padding:1px 6px;border-radius:3px;font-size:12px'>M=miss</span> &nbsp;"
-               "<span style='background:#e0e0e0;padding:1px 6px;border-radius:3px;font-size:12px'>A=abandoned</span>",
-               unsafe_allow_html=True)
+
+    # ── Toolbar: Download CSV ────────────────────────────────────────────────
+    import pandas as pd, io
+
+    # Build plain DataFrame for download
+    fixed_cols = ["rank","name","total_points","win_pct","missed"]
+    all_cols   = fixed_cols + match_ids_desc
+    df = pd.DataFrame(lb)
+    df = df[[c for c in all_cols if c in df.columns]]
+    df = df.rename(columns={
+        "rank":"#","name":"Player","total_points":"Points",
+        "win_pct":"Win%","missed":"Missed"})
+    rename_map = {mid: _match_label(mid) for mid in match_ids_desc}
+    df = df.rename(columns=rename_map)
+
+    def _fmt_dl(val):
+        if val is None or val == "": return "—"
+        if val == "A":    return "A"
+        if val == "miss": return "M"
+        if isinstance(val, str) and val.startswith("−"): return f"-{val[1:]}"
+        try:
+            f = float(val)
+            return f"+{f:.2f}" if f > 0 else (f"{f:.2f}" if f < 0 else "0")
+        except Exception:
+            return str(val)
+
+    for col in rename_map.values():
+        if col in df.columns:
+            df[col] = df[col].apply(_fmt_dl)
+
+    csv_buf = io.StringIO()
+    df.to_csv(csv_buf, index=False)
+    csv_bytes = csv_buf.getvalue().encode()
+
+    tc1, tc2, tc3 = st.columns([4, 1, 1])
+    tc1.markdown("### 📊 Leaderboard")
+    tc2.download_button(
+        "⬇️ CSV", data=csv_bytes,
+        file_name=f"leaderboard_{sel_tid}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="lb_download"
+    )
 
     # ── Build HTML table ──────────────────────────────────────────────────────
     m_labels = [_match_label(mid) for mid in match_ids_desc]
@@ -160,7 +196,19 @@ def show_leaderboard(user: dict):
 
         rows_html += f'<tr style="background:{bg}">{row_html}</tr>'
 
-    table_html = f"""
+    st.caption(
+        "Latest match first  ·  "
+        "<span style='background:#d1f0d7;padding:1px 6px;border-radius:3px;font-size:12px;color:#0e6e24'>Win</span> &nbsp;"
+        "<span style='background:#fcd7d7;padding:1px 6px;border-radius:3px;font-size:12px;color:#a01414'>Loss</span> &nbsp;"
+        "<span style='background:#fff3cd;padding:1px 6px;border-radius:3px;font-size:12px;color:#8c5500'>M=miss</span> &nbsp;"
+        "<span style='background:#e0e0e0;padding:1px 6px;border-radius:3px;font-size:12px;color:#777'>A=abandoned</span>",
+        unsafe_allow_html=True
+    )
+
+    # Expandable fullscreen view
+    with st.expander("⛶ Expand table", expanded=True):
+
+        table_html = f"""
     <style>
       .lb-table {{ width:100%; border-collapse:collapse; font-family:Arial,sans-serif; }}
       .lb-table td {{ white-space:nowrap; }}
@@ -175,35 +223,33 @@ def show_leaderboard(user: dict):
       </table>
     </div>
     """
-    st.html(table_html)
+        st.html(table_html)
 
     # ── Match Details — bordered frame, 6 per row ──────────────────────────────
     if match_ids_desc:
         st.markdown("")
         st.markdown("#### 🔍 Match Details")
-        with st.container(border=True):
-            # 6 buttons per row
-            COLS_PER_ROW = 6
-            chunks = [match_ids_desc[i:i+COLS_PER_ROW]
-                      for i in range(0, len(match_ids_desc), COLS_PER_ROW)]
+        COLS_PER_ROW = 6
+        chunks       = [match_ids_desc[i:i+COLS_PER_ROW]
+                        for i in range(0, len(match_ids_desc), COLS_PER_ROW)]
+        frame_h = min(len(chunks), 5) * 48 + 16
 
+        with st.container(border=True, height=frame_h):
             for chunk in chunks:
                 cols = st.columns(COLS_PER_ROW)
                 for ci, mid in enumerate(chunk):
-                    m     = next((x for x in matches_asc if x["match_id"] == mid), None)
-                    label = f"{_match_label(mid)}"
-                    tip   = m["title"] if m else mid
+                    m   = next((x for x in matches_asc if x["match_id"] == mid), None)
+                    tip = m["title"] if m else mid
                     with cols[ci]:
-                        if st.button(label, key=f"lb_{mid}",
-                                     help=tip,
-                                     use_container_width=True):
+                        if st.button(_match_label(mid), key=f"lb_{mid}",
+                                     help=tip, use_container_width=True):
                             st.session_state["page"]                = "match"
                             st.session_state["match_id"]            = mid
-                            st.session_state["match_list"]          = \
-                                [x["match_id"] for x in matches_asc]
+                            st.session_state["match_list"]          =                                 [x["match_id"] for x in matches_asc]
                             st.session_state["match_tournament_id"] = sel_tid
-                            st.session_state["_last_nav"]           = "home"
+                            # Must match a valid navbar page so navbar
+                            # doesn't detect a mismatch and override
+                            st.session_state["_last_nav"]           = "leaderboard"
                             st.rerun()
-                # Fill remaining columns in last row with empty
                 for ci in range(len(chunk), COLS_PER_ROW):
                     cols[ci].empty()
