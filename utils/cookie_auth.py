@@ -1,56 +1,76 @@
 """
 utils/cookie_auth.py
-Persistent login cookie using extra-streamlit-components CookieManager.
+Persistent login using browser localStorage via a custom Streamlit component.
+
+localStorage survives tab close/reopen and browser restart on same device.
+The component is an invisible iframe (height=0) using declare_component.
+
+File layout required in repo:
+  utils/
+    cookie_auth.py          ← this file
+    session_component/
+      index.html            ← the iframe component
 
 Secrets required:
     [cookie]
     encryption_key = "any-long-random-string"
 """
 
+import os
 import json
 import hashlib
 import base64
 import streamlit as st
+import streamlit.components.v1 as stc
 from datetime import datetime, timedelta, timezone
 
-COOKIE_NAME  = "sportspoll_session"
-COOKIE_DAYS  = 7
+COOKIE_DAYS   = 7
+_COMP_DIR     = os.path.join(os.path.dirname(__file__), "session_component")
+_COMP_KEY     = "__sportspoll_sess__"
 
+
+# ── Encryption ────────────────────────────────────────────────────────────────
 
 def _fernet():
     from cryptography.fernet import Fernet
-    raw = st.secrets.get("cookie", {}).get("encryption_key", "changeme")
+    raw = st.secrets.get("cookie", {}).get("encryption_key", "changeme-please")
     key = base64.urlsafe_b64encode(hashlib.sha256(raw.encode()).digest())
     return Fernet(key)
 
 
-def _get_manager():
-    if "_cookie_mgr" not in st.session_state:
-        from extra_streamlit_components import CookieManager
-        st.session_state["_cookie_mgr"] = CookieManager(prefix="ssp_")
-    return st.session_state["_cookie_mgr"]
+def _encrypt(data: str) -> str:
+    return _fernet().encrypt(data.encode()).decode()
 
 
-def save_session_cookie(user_id: str):
-    try:
-        expires = (datetime.now(timezone.utc) + timedelta(days=COOKIE_DAYS)).isoformat()
-        payload = json.dumps({"user_id": user_id, "expires": expires})
-        token   = _fernet().encrypt(payload.encode()).decode()
-        mgr     = _get_manager()
-        mgr.set(COOKIE_NAME, token,
-                expires_at=datetime.now() + timedelta(days=COOKIE_DAYS),
-                key=f"set_{COOKIE_NAME}")
-    except Exception:
-        pass
+def _decrypt(token: str) -> str:
+    return _fernet().decrypt(token.encode()).decode()
 
+
+# ── Component (declared once per process) ─────────────────────────────────────
+
+@st.cache_resource
+def _declare():
+    return stc.declare_component("sportspoll_session", path=_COMP_DIR)
+
+
+def _run_component(cmd: str = "read", value: str = "") -> str | None:
+    comp = _declare()
+    return comp(cmd=cmd, value=value, key=_COMP_KEY, default=None)
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def load_session_cookie() -> str | None:
+    """
+    Read localStorage and return user_id if session is valid.
+    Returns None on first run (component not yet mounted) — Streamlit
+    will auto-rerun once the component sends its value.
+    """
+    raw = _run_component(cmd="read")
+    if not raw:
+        return None
     try:
-        mgr   = _get_manager()
-        token = mgr.get(COOKIE_NAME)
-        if not token:
-            return None
-        payload = json.loads(_fernet().decrypt(token.encode()).decode())
+        payload = json.loads(_decrypt(raw))
         expires = datetime.fromisoformat(payload["expires"])
         if expires.tzinfo is None:
             expires = expires.replace(tzinfo=timezone.utc)
@@ -62,9 +82,14 @@ def load_session_cookie() -> str | None:
         return None
 
 
+def save_session_cookie(user_id: str):
+    """Write encrypted session to localStorage. Call after successful login."""
+    expires = (datetime.now(timezone.utc) + timedelta(days=COOKIE_DAYS)).isoformat()
+    payload = json.dumps({"user_id": user_id, "expires": expires})
+    token   = _encrypt(payload)
+    _run_component(cmd="set", value=token)
+
+
 def clear_session_cookie():
-    try:
-        mgr = _get_manager()
-        mgr.delete(COOKIE_NAME, key=f"del_{COOKIE_NAME}")
-    except Exception:
-        pass
+    """Clear localStorage session. Call on sign-out."""
+    _run_component(cmd="clear")
