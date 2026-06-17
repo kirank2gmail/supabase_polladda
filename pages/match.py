@@ -64,7 +64,7 @@ def show_match(user: dict, match_id: str):
     # ── Result ────────────────────────────────────────────────────────────────
     if match["status"] == "completed" and not voting:
         st.markdown("---")
-        _result_section(match, options, user["user_id"])
+        _result_section(match, options, user["user_id"], user_tz)
 
 
 # ── Navigation ────────────────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ def _poll_summary(match, options, voting_open, is_admin, user_tz="UTC"):
 
 # ── Result breakdown ──────────────────────────────────────────────────────────
 
-def _result_section(match, options, user_id):
+def _result_section(match, options, user_id, user_tz="UTC"):
     result   = match.get("result", "")
     votes    = get_votes(match_id=match["match_id"])
     pts_list = get_points()
