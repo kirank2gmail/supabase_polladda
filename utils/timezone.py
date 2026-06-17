@@ -73,8 +73,8 @@ def format_match_times(match: dict, user_timezone: str = None) -> dict:
     utc_dt    = aware.astimezone(pytz.utc)
 
     result = {
-        "local": aware.strftime("%d %b %Y  %H:%M  %Z"),
-        "utc"  : utc_dt.strftime("%d %b %Y  %H:%M  UTC"),
+        "local": aware.strftime("%d %b %Y %I:%M %p %Z"),
+        "utc"  : utc_dt.strftime("%d %b %Y %I:%M %p UTC"),
         "user" : None,
         "tz"   : match["timezone"],
     }
@@ -83,7 +83,7 @@ def format_match_times(match: dict, user_timezone: str = None) -> dict:
         try:
             user_tz   = pytz.timezone(user_timezone)
             user_dt   = aware.astimezone(user_tz)
-            result["user"] = user_dt.strftime("%d %b %Y  %H:%M  %Z")
+            result["user"] = user_dt.strftime("%d %b %Y %I:%M %p %Z")
         except Exception:
             pass
 
