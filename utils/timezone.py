@@ -130,9 +130,9 @@ def format_ts(iso_str: str, user_timezone: str = "UTC") -> str:
         return "—"
     try:
         tz = pytz.timezone(user_timezone)
-        return dt.astimezone(tz).strftime("%b-%d-%Y %I:%M %p")
+        return dt.astimezone(tz).strftime("%d %b %Y %I:%M %p")
     except Exception:
-        return dt.strftime("%b-%d-%Y %I:%M %p UTC")
+        return dt.strftime("%d %b %Y %I:%M %p UTC")
 
 
 def fmt_ts_user(iso_str: str, user: dict) -> str:
