@@ -9,7 +9,6 @@ from data.db import (
     get_match, get_matches, get_user_vote, cast_vote, update_vote,
     get_votes, delete_vote, get_points, get_all_users, get_display_name
 )
-from data.activity_log import log_vote_cast, log_vote_changed
 from utils.timezone import (
     is_voting_open, format_match_times, format_countdown, format_ts
 )
@@ -60,7 +59,7 @@ def show_match(user: dict, match_id: str):
 
     # ── Poll ──────────────────────────────────────────────────────────────────
     st.markdown("---")
-    _poll_summary(match, options, voting, is_admin)
+    _poll_summary(match, options, voting, is_admin, user_tz)
 
     # ── Result ────────────────────────────────────────────────────────────────
     if match["status"] == "completed" and not voting:
@@ -168,21 +167,16 @@ def _submit_vote(user_id, match, option, existing):
             st.warning(f"Already voted for {option}.")
             return
         update_vote(user_id, match["match_id"], option)
-        log_vote_changed(user_id, match["match_id"], match["title"],
-                         match["tournament_id"],
-                         old_vote=existing["vote"], new_vote=option)
         st.success(f"Vote updated to **{option}** ✅")
     else:
         cast_vote(user_id, match["match_id"], match["tournament_id"], option)
-        log_vote_cast(user_id, match["match_id"], match["title"],
-                      match["tournament_id"], vote=option)
         st.success(f"Vote cast for **{option}** ✅")
     st.rerun()
 
 
 # ── Poll summary ──────────────────────────────────────────────────────────────
 
-def _poll_summary(match, options, voting_open, is_admin):
+def _poll_summary(match, options, voting_open, is_admin, user_tz="UTC"):
     votes     = get_votes(match_id=match["match_id"])
     total     = len(votes)
     poll_mode = match.get("poll_mode", "closed")
@@ -225,7 +219,7 @@ def _poll_summary(match, options, voting_open, is_admin):
                     if is_admin:
                         c1, c2, c3 = st.columns([3, 3, 1])
                         c1.markdown(f"👤 **{dname}**")
-                        c2.caption(f"voted {v.get('voted_at','')[:16]}")
+                        c2.caption(format_ts(v.get('voted_at',''), user_tz))
                         if c3.button("🗑️", key=f"dv_{v['vote_id']}",
                                       help=f"Delete {dname}'s vote"):
                             delete_vote(v["user_id"], match["match_id"])
@@ -234,7 +228,7 @@ def _poll_summary(match, options, voting_open, is_admin):
                     else:
                         c1, c2 = st.columns([3, 3])
                         c1.markdown(f"👤 **{dname}**")
-                        c2.caption(f"voted {v.get('voted_at','')[:16]}")
+                        c2.caption(format_ts(v.get('voted_at',''), user_tz))
 
 
 # ── Result breakdown ──────────────────────────────────────────────────────────
@@ -277,7 +271,7 @@ def _result_section(match, options, user_id):
                     pts_str = f"+{u_pts}" if u_pts > 0 else str(u_pts)
                     st.markdown(
                         f"👤 **{name}**   "
-                        f"voted {v.get('voted_at','')[:16]}   "
+                        f"{format_ts(v.get('voted_at',''), user_tz)}   "
                         f"  {pts_str} pts"
                     )
 
