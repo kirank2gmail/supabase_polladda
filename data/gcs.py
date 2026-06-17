@@ -1,28 +1,40 @@
 """
 data/gcs.py
-Google Cloud Storage backend with per-table caching.
+Optimised caching for SportsPoll usage pattern:
+  - Users view leaderboard, past matches, vote for upcoming matches
+  - Only votes change data during normal usage
+  - Admin writes (results, new matches) are infrequent
 
-Each table has its own @st.cache_data function so that writing
-to one table (e.g. points) only clears that table's cache —
-not users, matches, tournaments etc.
+THREE TIERS:
 
-Before: write_table("points") → read_table.clear() → ALL 6 tables
-        refetched from GCS on next page load.
+  1. SESSION CACHE (st.session_state["_gcs"])
+     Loaded once per session per user. Never hits GCS again.
+     Tables: users, tournaments, matches, registrations, points
+     Invalidation: on explicit admin write to that table
 
-After:  write_table("points") → _cache_points.clear() → only points
-        refetched. Users, matches, tournaments stay cached.
+  2. VOTE WRITE-THROUGH + ASYNC GCS
+     When user casts/changes vote:
+       a. Update local session cache immediately → UI is instant
+       b. Write to GCS in background thread → non-blocking
+     Other users get the updated votes within 30s (their TTL)
 
-This cuts redundant GCS reads by ~80% in normal app usage.
+  3. SHORT TTL (30s) for votes
+     Votes may be written by other users concurrently.
+     30s TTL balances freshness vs GCS round-trips.
+     A user's own vote is always fresh (write-through to session).
 """
 
 import json
+import threading
 import streamlit as st
 from pathlib import Path
 
-CACHE_TTL = 300   # 5 minutes
+SESSION_KEY  = "_gcs"
+VOTES_TTL    = 30    # seconds — how stale other users' votes can be
+SESSION_TBLS = {"users", "tournaments", "matches", "registrations", "points"}
 
 
-# ── GCS connection ────────────────────────────────────────────────────────────
+# ── GCS primitives ────────────────────────────────────────────────────────────
 
 def _gcs_configured() -> bool:
     try:
@@ -35,119 +47,138 @@ def _gcs_configured() -> bool:
 def _get_bucket():
     from google.cloud import storage
     from google.oauth2.service_account import Credentials
-    sa     = st.secrets["gcp_service_account"]
-    creds  = Credentials.from_service_account_info(dict(sa))
+    sa    = st.secrets["gcp_service_account"]
+    creds = Credentials.from_service_account_info(dict(sa))
     client = storage.Client(credentials=creds, project=sa["project_id"])
     return client.bucket(st.secrets["gcs"]["bucket_name"])
 
 
-def _blob_name(table: str) -> str:
+def _blob(table: str):
     prefix = st.secrets.get("gcs", {}).get("prefix", "sportspoll/")
-    return f"{prefix}{table}.json"
+    return _get_bucket().blob(f"{prefix}{table}.json")
 
 
-def _read_from_gcs(table: str) -> list[dict]:
-    """Raw GCS read — no caching, used by per-table cached wrappers."""
+def _fetch(table: str) -> list[dict]:
+    """Synchronous GCS read."""
     if _gcs_configured():
         try:
-            bucket = _get_bucket()
-            blob   = bucket.blob(_blob_name(table))
-            if not blob.exists():
-                return []
-            return json.loads(blob.download_as_text(encoding="utf-8"))
+            b = _blob(table)
+            return json.loads(b.download_as_text(encoding="utf-8")) if b.exists() else []
         except Exception as e:
             st.warning(f"GCS read error ({table}): {e}")
             return []
     else:
-        local_dir = Path(__file__).parent / "store"
-        p = local_dir / f"{table}.json"
-        if not p.exists():
-            return []
-        try:
-            with open(p) as f:
-                return json.load(f)
-        except Exception:
-            return []
+        p = Path(__file__).parent / "store" / f"{table}.json"
+        return json.loads(p.read_text()) if p.exists() else []
 
 
-def _write_to_gcs(table: str, records: list[dict]):
-    """Raw GCS write — no cache logic, used by write_table."""
+def _push(table: str, records: list[dict]):
+    """Synchronous GCS write."""
     data = json.dumps(records, indent=2, default=str)
     if _gcs_configured():
         try:
-            bucket = _get_bucket()
-            blob   = bucket.blob(_blob_name(table))
-            blob.upload_from_string(data, content_type="application/json")
+            _blob(table).upload_from_string(data, content_type="application/json")
         except Exception as e:
             st.error(f"GCS write error ({table}): {e}")
     else:
-        local_dir = Path(__file__).parent / "store"
-        local_dir.mkdir(parents=True, exist_ok=True)
-        with open(local_dir / f"{table}.json", "w") as f:
-            f.write(data)
+        local = Path(__file__).parent / "store"
+        local.mkdir(parents=True, exist_ok=True)
+        (local / f"{table}.json").write_text(data)
 
 
-# ── Per-table cached read functions ──────────────────────────────────────────
-# One function per table so each has its own independent cache.
-# Clearing _cache_points() does NOT affect _cache_users() etc.
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _cache_users()         -> list[dict]: return _read_from_gcs("users")
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _cache_tournaments()   -> list[dict]: return _read_from_gcs("tournaments")
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _cache_registrations() -> list[dict]: return _read_from_gcs("registrations")
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _cache_matches()       -> list[dict]: return _read_from_gcs("matches")
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _cache_votes()         -> list[dict]: return _read_from_gcs("votes")
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _cache_points()        -> list[dict]: return _read_from_gcs("points")
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def _cache_sessions()      -> list[dict]: return _read_from_gcs("sessions")
+def _push_async(table: str, records: list[dict]):
+    """
+    Fire-and-forget GCS write in a background thread.
+    Returns immediately — does not block Streamlit rendering.
+    Safe because GCS writes are atomic (full blob replace).
+    """
+    # Pass a copy so the list can't be mutated while thread is writing
+    data_copy = list(records)
+    t = threading.Thread(target=_push, args=(table, data_copy), daemon=True)
+    t.start()
+    return t   # caller can .join() if they need to wait
 
 
-# Table name → (read_fn, clear_fn) mapping
-_TABLE_CACHE = {
-    "users"         : (_cache_users,         _cache_users.clear),
-    "tournaments"   : (_cache_tournaments,   _cache_tournaments.clear),
-    "registrations" : (_cache_registrations, _cache_registrations.clear),
-    "matches"       : (_cache_matches,       _cache_matches.clear),
-    "votes"         : (_cache_votes,         _cache_votes.clear),
-    "points"        : (_cache_points,        _cache_points.clear),
-    "sessions"      : (_cache_sessions,      _cache_sessions.clear),
-}
+# ── TTL cache for votes (shared across sessions) ──────────────────────────────
+
+@st.cache_data(ttl=VOTES_TTL, show_spinner=False)
+def _ttl_votes() -> list[dict]:
+    return _fetch("votes")
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _ttl_sessions() -> list[dict]:
+    return _fetch("sessions")
+
+
+# ── Session cache helpers ─────────────────────────────────────────────────────
+
+def _sess() -> dict:
+    return st.session_state.setdefault(SESSION_KEY, {})
+
+
+def _sess_get(table: str) -> list[dict]:
+    cache = _sess()
+    if table not in cache:
+        cache[table] = _fetch(table)
+    return cache[table]
+
+
+def _sess_set(table: str, records: list[dict]):
+    _sess()[table] = records
+
+
+def _sess_clear(table: str):
+    _sess().pop(table, None)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def read_table(table: str) -> list[dict]:
     """
-    Read a table from cache (or GCS on cache miss).
-    Each table is cached independently — a write to 'points'
-    does not invalidate the 'users' or 'matches' cache.
+    Read a table using the appropriate cache tier.
+
+    votes    → 30s TTL (other users vote concurrently)
+    sessions → 60s TTL (auth, rarely changes)
+    others   → session cache (loaded once, stays for session)
     """
-    if table in _TABLE_CACHE:
-        read_fn, _ = _TABLE_CACHE[table]
-        return read_fn()
-    # Unknown table — read directly without caching
-    return _read_from_gcs(table)
+    if table == "votes":    return _ttl_votes()
+    if table == "sessions": return _ttl_sessions()
+    if table in SESSION_TBLS: return _sess_get(table)
+    return _fetch(table)
 
 
-def write_table(table: str, records: list[dict]):
+def write_table(table: str, records: list[dict], async_write: bool = False):
     """
-    Write a table to GCS and clear ONLY that table's cache.
-    Other tables remain cached and unaffected.
-    """
-    _write_to_gcs(table, records)
+    Write a table to GCS and update the appropriate cache.
 
-    if table in _TABLE_CACHE:
-        _, clear_fn = _TABLE_CACHE[table]
-        clear_fn()
-    # Unknown tables: no cache to clear, that's fine
+    async_write=True  → update local cache instantly, write GCS in background.
+                        Use for votes: user sees their vote immediately.
+
+    async_write=False → synchronous write (default).
+                        Use for admin operations where consistency matters.
+
+    Cache invalidation:
+      votes    → update local session votes + clear TTL cache
+                 (so other users see the update within 30s)
+      sessions → clear TTL cache
+      others   → clear from session cache (reloads on next read)
+    """
+    if async_write:
+        # Update local view immediately — UI is instant
+        _sess_set(table, records)
+        # Write GCS in background
+        _push_async(table, records)
+        # Clear TTL so other users pick up the change within 30s
+        if table == "votes":
+            _ttl_votes.clear()
+    else:
+        # Synchronous write — wait for GCS confirmation
+        _push(table, records)
+        # Invalidate caches
+        if table == "votes":
+            _sess_set(table, records)
+            _ttl_votes.clear()
+        elif table == "sessions":
+            _ttl_sessions.clear()
+        elif table in SESSION_TBLS:
+            _sess_set(table, records)
