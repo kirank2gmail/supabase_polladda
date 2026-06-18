@@ -32,6 +32,11 @@ from data.db import (
 )
 from utils.timezone import COMMON_TIMEZONES
 from data.activity_log import log_login
+from utils.session_manager import (
+    create_session, validate_session, delete_session,
+    get_session_token, set_session_token, clear_session_token
+)
+from data.db import is_legacy_password
 import pytz
 
 for k, v in [("user", None), ("page", "home"),
@@ -77,6 +82,10 @@ def render_navbar(user: dict):
         f"👤 {nick}</div>", unsafe_allow_html=True)
 
     if c_out.button("Sign Out", use_container_width=True, key="signout_btn"):
+        token = get_session_token()
+        if token:
+            delete_session(token)
+            clear_session_token()
         for k in ("user","page","match_id","tournament_id","_last_nav"):
             st.session_state[k] = None if k == "user" else "home"
         st.rerun()
@@ -156,6 +165,8 @@ def show_login():
                         st.session_state["page"]      = "home"
                         st.session_state["_last_nav"] = "home"
                         log_login(u["user_id"])
+                        token = create_session(u["user_id"])
+                        set_session_token(token)
                         st.rerun()
                     else:
                         st.error("Username or password is incorrect.")
@@ -167,7 +178,10 @@ def show_change_password(user: dict):
     _, col, _ = st.columns([1, 2, 1])
     with col:
         st.title("🔑 Set Your Password")
-        st.info("You must set a new password before continuing.")
+        if st.session_state.get("_legacy_pw_reset"):
+            st.warning("We've upgraded our password security. Please set a new password to continue.")
+        else:
+            st.info("You must set a new password before continuing.")
         with st.form("change_pw"):
             pw1 = st.text_input("New password (min 6 chars)", type="password")
             pw2 = st.text_input("Confirm new password",       type="password")
@@ -272,10 +286,27 @@ def route(user: dict):
 user = st.session_state.get("user")
 
 if not user:
+    token = get_session_token()
+    if token:
+        uid = validate_session(token)
+        if uid:
+            u = get_user_by_id(uid)
+            if u and not u.get("must_change_password"):
+                st.session_state["user"]      = u
+                st.session_state["page"]      = "home"
+                st.session_state["_last_nav"] = "home"
+                user = u
+        else:
+            clear_session_token()
+
+if not user:
     show_login()
     st.stop()
 
-if user.get("must_change_password"):
+# Force password reset for legacy SHA-256 passwords
+if user.get("must_change_password") or is_legacy_password(user["user_id"]):
+    if not user.get("must_change_password"):
+        st.session_state["_legacy_pw_reset"] = True
     show_change_password(user)
     st.stop()
 
