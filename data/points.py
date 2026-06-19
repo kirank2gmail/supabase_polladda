@@ -109,6 +109,42 @@ def _count_prior_misses(user_id: str, match_id: str,
         and f"{m['match_date']} {m['start_time']}" < this_dt
         and m["match_id"] not in voted_ids
     )
+def _get_quit_players(tournament_id: str) -> dict:
+    """
+    Return {user_id: quit_at_iso} for players who quit this tournament.
+    Cached from registrations table.
+    """
+    return {
+        r["user_id"]: r["quit_at"]
+        for r in read_table("registrations")
+        if r.get("tournament_id") == tournament_id
+        and r.get("quit_at")
+    }
+
+
+def _player_quit_before(user_id: str, match_dt: str,
+                         quit_map: dict) -> bool:
+    """
+    True if this player quit before the match start time.
+    match_dt format: "YYYY-MM-DD HH:MM"
+    quit_at format: ISO UTC e.g. "2026-06-18T14:30:00+00:00"
+    We compare naively as strings after normalising to "YYYY-MM-DD HH:MM".
+    """
+    quit_at = quit_map.get(user_id, "")
+    if not quit_at:
+        return False
+    # Normalise quit_at to "YYYY-MM-DD HH:MM" for comparison
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(quit_at)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        quit_str = dt.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        quit_str = quit_at[:16]
+    return quit_str <= match_dt
+
+
 def calculate_match_points(match_id: str, tournament_id: str,
                             winning_option: str) -> list[dict]:
     tournament = _get_tournament(tournament_id)
@@ -121,13 +157,33 @@ def calculate_match_points(match_id: str, tournament_id: str,
     allowed_misses = int(tournament.get("allowed_misses", 3))
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
+    # Players who quit — get their quit timestamps
+    quit_map = _get_quit_players(tournament_id)
+    match_dt = f"{match.get('match_date', '')} {match.get('start_time', '')}"
+
     registered   = [r["user_id"] for r in _get_registrations(tournament_id)]
     votes        = _get_votes(match_id=match_id)
-    voted_users  = {v["user_id"] for v in votes}
-    missed_users = [u for u in registered if u not in voted_users]
 
-    winner_votes = [v for v in votes if v["vote"] == winning_option]
-    loser_votes  = [v for v in votes if v["vote"] != winning_option]
+    # Exclude quit players from votes and missed calculation
+    # Quit players get 0 points for all matches after their quit time
+    active_registered = [
+        u for u in registered
+        if not _player_quit_before(u, match_dt, quit_map)
+    ]
+    quit_in_match = [
+        u for u in registered
+        if _player_quit_before(u, match_dt, quit_map)
+    ]
+
+    voted_users  = {v["user_id"] for v in votes if v["user_id"] in active_registered}
+    missed_users = [u for u in active_registered if u not in voted_users]
+
+    winner_votes = [v for v in votes
+                    if v["vote"] == winning_option
+                    and v["user_id"] in active_registered]
+    loser_votes  = [v for v in votes
+                    if v["vote"] != winning_option
+                    and v["user_id"] in active_registered]
     n_winners    = len(winner_votes)
 
     results    = []
@@ -186,6 +242,16 @@ def calculate_match_points(match_id: str, tournament_id: str,
             "base_points": total_win, "penalty_points": 0,
             "bonus_points": 0, "total_points": total_win,
             "note": note_win,
+        })
+
+    # ── Quit players — 0 points, excluded from pool ──────────────────────────
+    for user_id in quit_in_match:
+        results.append({
+            "user_id": user_id, "match_id": match_id,
+            "tournament_id": tournament_id,
+            "base_points": 0, "penalty_points": 0,
+            "bonus_points": 0, "total_points": 0,
+            "note": "quit",
         })
 
     return results
