@@ -17,7 +17,14 @@ from data.gcs import read_table, write_table
 
 def _now():          return datetime.utcnow().isoformat()
 def _uid():          return str(uuid.uuid4())[:8]
-def _hash(pw: str):  return hashlib.sha256(pw.encode()).hexdigest()
+def _hash(pw: str):  return hashlib.sha256(pw.encode()).hexdigest()   # legacy SHA-256
+
+def _hash_bcrypt(pw: str) -> str:
+    import bcrypt
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+
+def _is_bcrypt(h: str) -> bool:
+    return h.startswith("$2b$") or h.startswith("$2a$")
 
 def _insert(table: str, record: dict):
     rows = read_table(table); rows.append(record); write_table(table, rows)
@@ -75,13 +82,26 @@ def create_user(name: str, password: str, role: str = "user",
     return user
 
 def verify_password(user_id: str, password: str) -> bool:
+    """Supports both bcrypt (new) and SHA-256 (legacy)."""
+    import bcrypt
     u = get_user_by_id(user_id)
-    return bool(u and u.get("password_hash") == _hash(password))
+    if not u: return False
+    h = u.get("password_hash", "")
+    if _is_bcrypt(h):
+        return bcrypt.checkpw(password.encode(), h.encode())
+    return h == _hash(password)
+
+def is_legacy_password(user_id: str) -> bool:
+    """True if user still has a SHA-256 (legacy) password hash."""
+    u = get_user_by_id(user_id)
+    return bool(u and not _is_bcrypt(u.get("password_hash", "")))
 
 def change_password(user_id: str, new_password: str):
+    """Always stores new passwords as bcrypt."""
+    new_hash = _hash_bcrypt(new_password)
     _update_where("users",
         lambda r: r["user_id"] == user_id,
-        lambda r: r.update({"password_hash"       : _hash(new_password),
+        lambda r: r.update({"password_hash"       : new_hash,
                              "must_change_password": False}))
 
 def update_nickname(user_id: str, nickname: str):
@@ -170,10 +190,7 @@ def register_user(user_id: str, tid: str):
 # ── Player quit ───────────────────────────────────────────────────────────────
 
 def set_player_quit(user_id: str, tid: str, quit_at: str):
-    """
-    Mark a player as having quit a tournament at quit_at (ISO UTC string).
-    Stored in the registration record. Auto-registers if not already registered.
-    """
+    """Mark a player as quit at quit_at (ISO UTC). Auto-registers if needed."""
     ensure_registered(user_id, tid)
     _update_where("registrations",
         lambda r: r["user_id"] == user_id and r["tournament_id"] == tid,
@@ -183,10 +200,10 @@ def remove_player_quit(user_id: str, tid: str):
     """Remove quit status — player is back in the tournament."""
     _update_where("registrations",
         lambda r: r["user_id"] == user_id and r["tournament_id"] == tid,
-        lambda r: r.pop("quit_at", None) or r.update({"quit_at": ""}))
+        lambda r: r.update({"quit_at": ""}))
 
 def get_quit_players(tid: str) -> list[dict]:
-    """Return list of {user_id, quit_at} for players who have quit this tournament."""
+    """Return list of {user_id, quit_at} for players who quit this tournament."""
     return [
         {"user_id": r["user_id"], "quit_at": r.get("quit_at", "")}
         for r in read_table("registrations")
