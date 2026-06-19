@@ -368,8 +368,43 @@ def send_leaderboard(match: dict, result: str,
         rows.append(row_cells)
         styles.append(row_styles)
 
+    # Add Total row to PNG
+    col_totals_png = {}
+    for mid in last5_match_ids:
+        col_totals_png[mid] = sum(
+            float(row.get(mid, 0) or 0)
+            for row in leaderboard_rows
+            if isinstance(row.get(mid), (int, float))
+        )
+
+    bank_total_png = -sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
+    bank_str_png   = f"+{bank_total_png:.2f}" if bank_total_png >= 0 else f"{bank_total_png:.2f}"
+
+    total_cells_png  = ["—", "Total", "", "", ""]
+    total_styles_png = [
+        (None, BLACK, "—"),
+        (None, BLACK, "Total"),
+        (None, BLACK, ""),
+        (None, BLACK, ""),
+        (None, BLACK, ""),
+    ]
+    for mid in last5_match_ids:
+        t = col_totals_png.get(mid, 0.0)
+        if t > 0:
+            total_cells_png.append(f"+{t:.2f}")
+            total_styles_png.append((WIN_BG, WIN_FG, f"+{t:.2f}"))
+        elif t < 0:
+            total_cells_png.append(f"{t:.2f}")
+            total_styles_png.append((LOSS_BG, LOSS_FG, f"{t:.2f}"))
+        else:
+            total_cells_png.append("0")
+            total_styles_png.append((None, BLACK, "0"))
+
+    rows.append(total_cells_png)
+    styles.append(total_styles_png)
+
     title    = f"Leaderboard — {tournament_name}"
-    subtitle = f"After: {match['title']}  ·  Result: {result} Won"
+    subtitle = f"After: {match['title']}  ·  Result: {result} Won  ·  🏦 Bank: {bank_str_png} pts"
     png = _render_table_png(title, subtitle, headers, rows, styles)
 
     # ── HTML body ─────────────────────────────────────────────────────────────
@@ -411,6 +446,32 @@ def send_leaderboard(match: dict, result: str,
           <td>{winp:.0f}%</td>
           <td>{miss}</td>{mcells}</tr>"""
 
+    # Total row for HTML email
+    total_row_html = "<tr style='background:#f0f4ff;font-weight:700;border-top:2px solid #28324f'>"
+    total_row_html += "<td>—</td><td>Total</td><td></td><td></td><td></td>"
+    for mid in last5_match_ids:
+        col_sum = sum(
+            float(row.get(mid, 0) or 0)
+            for row in leaderboard_rows
+            if isinstance(row.get(mid), (int, float))
+        )
+        if col_sum > 0:
+            total_row_html += f"<td style='color:#0e6e24;text-align:right'>+{col_sum:.2f}</td>"
+        elif col_sum < 0:
+            total_row_html += f"<td style='color:#a01414;text-align:right'>{col_sum:.2f}</td>"
+        else:
+            total_row_html += "<td style='text-align:right'>0</td>"
+    total_row_html += "</tr>"
+
+    # Bank = sum of all points negated across ALL matches in tournament
+    all_pts_sum = sum(float(r.get("total_points", 0)) for r in leaderboard_rows
+                      for mid in last5_match_ids
+                      if isinstance(r.get(mid), (int, float)))
+    # Recalculate properly from leaderboard row totals
+    bank_total = -sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
+    bank_str   = f"+{bank_total:.2f}" if bank_total >= 0 else f"{bank_total:.2f}"
+    bank_color = "#0e6e24" if bank_total > 0 else ("#a01414" if bank_total < 0 else "#555")
+
     html = f"""<!DOCTYPE html><html><body
       style="font-family:Arial,sans-serif;background:#fff;padding:24px;color:#111">
       <h2 style="color:#1a2850">Leaderboard — {tournament_name}</h2>
@@ -421,9 +482,13 @@ def send_leaderboard(match: dict, result: str,
         <tr style="background:#28324f;color:#fff">
           <th>#</th><th>Player</th><th>Points</th>
           <th>Win%</th><th>Missed</th>{m_hdrs}
-        </tr>{rows_html}
+        </tr>{rows_html}{total_row_html}
       </table>
-      <p style="font-size:12px;color:#aaa;margin-top:12px">
+      <p style="margin-top:12px">
+        🏦 <b>Bank:</b>
+        <span style="color:{bank_color};font-weight:700">{bank_str} pts</span>
+      </p>
+      <p style="font-size:12px;color:#aaa;margin-top:8px">
         Last {len(last5_match_ids)} completed matches (latest first).<br>
         See attached PNG for shareable version.</p>
     </body></html>"""
