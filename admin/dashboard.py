@@ -752,6 +752,9 @@ def _player_quit_tab():
     All matches starting after the quit time give the player 0 points.
     Points are recalculated immediately for all affected matches.
     """
+    from datetime import datetime, timezone
+    import pytz
+
     ts = get_tournaments()
     if not ts:
         st.warning("No tournaments found.")
@@ -763,9 +766,14 @@ def _player_quit_tab():
     sel_tid = t_ids[t_names.index(sel_n)]
 
     all_ms    = get_matches(sel_tid)
-    users     = get_all_users()
+    all_users = get_all_users()
     quit_list = get_quit_players(sel_tid)
     quit_map  = {q["user_id"]: q["quit_at"] for q in quit_list}
+
+    # Only show users registered for this specific tournament
+    from data.db import get_registrations
+    registered_ids = {r["user_id"] for r in get_registrations(sel_tid)}
+    tournament_users = [u for u in all_users if u["user_id"] in registered_ids]
 
     # ── Section 1: Mark a player as quit ──────────────────────────────────────
     st.subheader("⛔ Mark Player as Quit")
@@ -774,18 +782,17 @@ def _player_quit_tab():
         "Missed/penalty rules no longer apply to them."
     )
 
-    from datetime import datetime, timezone
-    import pytz
-
-    with st.form("quit_form"):
-        # Only show users not already quit
-        active_users = [u for u in users if u["user_id"] not in quit_map]
+    # Use sel_tid in form key so form resets when tournament changes
+    with st.form(f"quit_form_{sel_tid}"):
+        # Only show registered players not already quit
+        active_users = [u for u in tournament_users
+                        if u["user_id"] not in quit_map]
         if not active_users:
-            st.info("All registered players have already quit.")
+            st.info("All registered players have already quit this tournament.")
             st.form_submit_button("Mark as Quit", disabled=True)
         else:
             user_names  = [u["name"] for u in active_users]
-            sel_uname   = st.selectbox("Player", user_names, key="quit_user")
+            sel_uname   = st.selectbox("Player", user_names, key=f"quit_user_{sel_tid}")
             sel_user    = active_users[user_names.index(sel_uname)]
 
             c1, c2 = st.columns(2)
@@ -838,7 +845,7 @@ def _player_quit_tab():
 
     ist = pytz.timezone("Asia/Kolkata")
     for q in quit_list:
-        u = next((x for x in users if x["user_id"] == q["user_id"]), None)
+        u = next((x for x in all_users if x["user_id"] == q["user_id"]), None)
         name = u["name"] if u else q["user_id"]
         # Format quit time in IST
         try:
