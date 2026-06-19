@@ -27,8 +27,6 @@ def _cell_html(val) -> str:
         return '<td style="color:#999;text-align:right">—</td>'
     if val == "A":
         return '<td style="background:#e0e0e0;color:#777;text-align:center;font-weight:600">A</td>'
-    if val == "Q":
-        return '<td style="background:#fff0e0;color:#b35900;text-align:center;font-weight:600">Q</td>'
     if val == "miss":
         return '<td style="background:#fff3cd;color:#8c5500;text-align:center;font-weight:600">M</td>'
     if isinstance(val, str) and val.startswith("−"):
@@ -195,10 +193,52 @@ def show_leaderboard(user: dict):
         "<span style='background:#d1f0d7;padding:1px 6px;border-radius:3px;font-size:12px;color:#0e6e24'>Win</span> &nbsp;"
         "<span style='background:#fcd7d7;padding:1px 6px;border-radius:3px;font-size:12px;color:#a01414'>Loss</span> &nbsp;"
         "<span style='background:#fff3cd;padding:1px 6px;border-radius:3px;font-size:12px;color:#8c5500'>M=miss</span> &nbsp;"
-        "<span style='background:#e0e0e0;padding:1px 6px;border-radius:3px;font-size:12px;color:#777'>A=abandoned</span> &nbsp;"
-        "<span style='background:#fff0e0;padding:1px 6px;border-radius:3px;font-size:12px;color:#b35900'>Q=quit</span>",
+        "<span style='background:#e0e0e0;padding:1px 6px;border-radius:3px;font-size:12px;color:#777'>A=abandoned</span>",
         unsafe_allow_html=True
     )
+
+    # ── Total row + Bank ─────────────────────────────────────────────────────
+    # Total row: sum of all players' points per match column
+    # Bank per match: -(sum of all points) = what didn't get redistributed
+    col_totals = {}   # match_id → sum of all player points
+    bank_total = 0.0  # cumulative bank across ALL completed matches (not just shown)
+
+    # Use full points table for bank (all matches, not just displayed columns)
+    from data.db import get_points as _gp
+    all_pts = _gp(tournament_id=sel_tid)
+    all_match_ids = {p["match_id"] for p in all_pts}
+    for mid in all_match_ids:
+        match_sum = sum(float(p.get("total_points", 0))
+                        for p in all_pts if p["match_id"] == mid)
+        bank_total += -match_sum   # bank = what wasn't distributed
+
+    # Column totals for displayed columns only
+    for mid in match_ids_desc:
+        col_sum = sum(
+            float(row.get(mid, 0) or 0)
+            for row in lb
+            if isinstance(row.get(mid), (int, float))
+        )
+        col_totals[mid] = col_sum
+
+    # Build total row HTML
+    td_tot = "padding:9px 12px;font-size:14px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff"
+    total_row_html = (
+        f'<td style="{td_tot};text-align:center">—</td>'
+        f'<td style="{td_tot}">Total</td>'
+        f'<td style="{td_tot};text-align:right"></td>'
+        f'<td style="{td_tot};text-align:right"></td>'
+        f'<td style="{td_tot};text-align:right"></td>'
+    )
+    for mid in match_ids_desc:
+        t = col_totals.get(mid, 0.0)
+        if t > 0:
+            cell = f'<td style="{td_tot};text-align:right;color:#0e6e24">+{t:.2f}</td>'
+        elif t < 0:
+            cell = f'<td style="{td_tot};text-align:right;color:#a01414">{t:.2f}</td>'
+        else:
+            cell = f'<td style="{td_tot};text-align:right;color:#555">0</td>'
+        total_row_html += cell
 
     table_html = f"""
     <style>
@@ -211,11 +251,22 @@ def show_leaderboard(user: dict):
         <thead>
           <tr style="background:#28324f;color:#ffffff">{header_html}</tr>
         </thead>
-        <tbody>{rows_html}</tbody>
+        <tbody>
+          {rows_html}
+          <tr>{total_row_html}</tr>
+        </tbody>
       </table>
     </div>
     """
     st.html(table_html)
+
+    # Bank display below table
+    bank_str   = f"+{bank_total:.2f}" if bank_total > 0 else f"{bank_total:.2f}"
+    bank_color = "#0e6e24" if bank_total > 0 else ("#a01414" if bank_total < 0 else "#555")
+    st.markdown(
+        f"🏦 **Bank:** <span style='color:{bank_color};font-weight:700'>{bank_str}</span> pts",
+        unsafe_allow_html=True
+    )
 
     st.download_button(
         "⬇️ Download CSV", data=csv_bytes,
