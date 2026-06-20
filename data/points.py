@@ -34,9 +34,17 @@ def _get_match(mid):
     return next((m for m in read_table("matches")
                  if m["match_id"] == mid), None)
 
-def _get_registrations(tid):
-    return [r for r in read_table("registrations")
-            if r["tournament_id"] == tid]
+def _get_match_players(match_id: str, tournament_id: str) -> list[dict]:
+    """
+    Read match_players for this specific match directly from GCS.
+    No cache — always fresh. Returns list of {user_id, status, ...}.
+    Only active players are considered for miss/winner/loser logic.
+    Quit players get 0 points and are excluded from the pool.
+    """
+    from data.gcs import _fetch
+    return [r for r in _fetch("match_players")
+            if r["match_id"] == match_id
+            and r["tournament_id"] == tournament_id]
 
 def _get_votes(match_id=None, tournament_id=None):
     vs = read_table("votes")
@@ -62,14 +70,15 @@ def _count_prior_misses(user_id: str, match_id: str,
     """
     Count matches this user missed BEFORE match_id in this tournament.
 
-    Key fix: counts ALL tournament matches (any status) before this match,
-    not just completed ones. This ensures accuracy when results are entered
-    out of chronological order — earlier missed matches are still counted
-    even if their results haven't been entered yet.
-
-    Abandoned matches excluded. Counts only from player's first voted match.
+    Uses match_players.json (read fresh from GCS) — no registrations needed.
+    A "miss" is a match where the player has an "active" record in match_players
+    but no vote in votes.json.
+    Only counts from the player's first match_player record onwards.
+    Abandoned matches are excluded (they have no match_player records).
     """
-    # All non-abandoned matches in tournament regardless of status
+    from data.gcs import _fetch
+
+    # All non-abandoned matches in this tournament
     all_matches = [m for m in _get_matches(tournament_id=tournament_id)
                    if m.get("result") != "abandoned"
                    and m.get("status") != "abandoned"]
@@ -79,34 +88,48 @@ def _count_prior_misses(user_id: str, match_id: str,
     if not this_match:
         return 0
 
-    this_dt    = f"{this_match['match_date']} {this_match['start_time']}"
+    this_dt = f"{this_match['match_date']} {this_match['start_time']}"
+
+    # Get this player's match_player records (active + quit) for this tournament
+    all_mp = _fetch("match_players")
+    player_mp = [r for r in all_mp
+                 if r["user_id"] == user_id
+                 and r["tournament_id"] == tournament_id]
+
+    if not player_mp:
+        return 0  # no match_player records — player hasn't started yet
+
+    # Build set of match IDs where player has a vote
     all_votes  = _get_votes(tournament_id=tournament_id)
-    user_votes = [v for v in all_votes if v["user_id"] == user_id]
-    voted_ids  = {v["match_id"] for v in user_votes}
+    voted_ids  = {v["match_id"] for v in all_votes if v["user_id"] == user_id}
 
-    if not voted_ids:
-        return 0   # never voted — no misses
-
-    # Find the player's first voted match date+time
-    voted_match_dts = [
-        f"{m['match_date']} {m['start_time']}"
-        for m in all_matches if m["match_id"] in voted_ids
-    ]
-    if not voted_match_dts:
+    # Player's first active match (by match date+time)
+    active_mp_ids = {r["match_id"] for r in player_mp if r["status"] == "active"}
+    if not active_mp_ids:
         return 0
 
-    first_vote_dt = min(voted_match_dts)
+    active_match_dts = [
+        f"{m['match_date']} {m['start_time']}"
+        for m in all_matches if m["match_id"] in active_mp_ids
+    ]
+    if not active_match_dts:
+        return 0
 
-    # Count matches that:
-    #   1. Started strictly AFTER the player's first voted match
-    #      (matches before first vote don't count — player wasn't participating)
+    first_active_dt = min(active_match_dts)
+
+    # Count matches where:
+    #   1. Started strictly AFTER player's first active match
     #   2. Started strictly BEFORE this match
-    #   3. Player did not vote in
+    #   3. Player has an active match_player record (not quit, not before joining)
+    #   4. Player did NOT vote
+    active_mp_id_set = {r["match_id"] for r in player_mp if r["status"] == "active"}
+
     return sum(
         1 for m in all_matches
         if m["match_id"] != match_id
-        and f"{m['match_date']} {m['start_time']}" > first_vote_dt
+        and f"{m['match_date']} {m['start_time']}" > first_active_dt
         and f"{m['match_date']} {m['start_time']}" < this_dt
+        and m["match_id"] in active_mp_id_set
         and m["match_id"] not in voted_ids
     )
 def calculate_match_points(match_id: str, tournament_id: str,
@@ -121,13 +144,19 @@ def calculate_match_points(match_id: str, tournament_id: str,
     allowed_misses = int(tournament.get("allowed_misses", 3))
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
-    registered   = [r["user_id"] for r in _get_registrations(tournament_id)]
-    votes        = _get_votes(match_id=match_id)
-    voted_users  = {v["user_id"] for v in votes}
-    missed_users = [u for u in registered if u not in voted_users]
+    # Read match_players fresh from GCS — no cache
+    mp_records   = _get_match_players(match_id, tournament_id)
+    active_users = {r["user_id"] for r in mp_records if r["status"] == "active"}
+    quit_users   = {r["user_id"] for r in mp_records if r["status"] == "quit"}
 
-    winner_votes = [v for v in votes if v["vote"] == winning_option]
-    loser_votes  = [v for v in votes if v["vote"] != winning_option]
+    votes        = _get_votes(match_id=match_id)
+    voted_users  = {v["user_id"] for v in votes if v["user_id"] in active_users}
+    missed_users = [u for u in active_users if u not in voted_users]
+
+    winner_votes = [v for v in votes
+                    if v["vote"] == winning_option and v["user_id"] in active_users]
+    loser_votes  = [v for v in votes
+                    if v["vote"] != winning_option and v["user_id"] in active_users]
     n_winners    = len(winner_votes)
 
     results    = []
@@ -186,6 +215,16 @@ def calculate_match_points(match_id: str, tournament_id: str,
             "base_points": total_win, "penalty_points": 0,
             "bonus_points": 0, "total_points": total_win,
             "note": note_win,
+        })
+
+    # ── Quit players — 0 points, excluded from pool ─────────────────────────
+    for user_id in quit_users:
+        results.append({
+            "user_id": user_id, "match_id": match_id,
+            "tournament_id": tournament_id,
+            "base_points": 0, "penalty_points": 0,
+            "bonus_points": 0, "total_points": 0,
+            "note": "quit",
         })
 
     return results
