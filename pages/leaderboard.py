@@ -197,6 +197,33 @@ def show_leaderboard(user: dict):
         unsafe_allow_html=True
     )
 
+    # ── Total row ────────────────────────────────────────────────────────────
+    # Sum each player's points per match column
+    # Bank = negative of the grand total (what wasn't distributed)
+    col_totals = {}
+    for mid in match_ids_desc:
+        col_totals[mid] = sum(
+            float(row.get(mid, 0) or 0)
+            for row in lb
+            if isinstance(row.get(mid), (int, float))
+        )
+    grand_total = sum(float(row.get("total_points", 0)) for row in lb)
+
+    td_tot = "padding:9px 12px;font-size:14px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff;white-space:nowrap"
+    total_row_html = (
+        f'<td style="{td_tot};text-align:center">—</td>'
+        f'<td style="{td_tot}">Total</td>'
+        f'<td style="{td_tot};text-align:right;color:{"#0e6e24" if grand_total>=0 else "#a01414"}">'
+        f'{"+" if grand_total>=0 else ""}{grand_total:.2f}</td>'
+        f'<td style="{td_tot}"></td>'
+        f'<td style="{td_tot}"></td>'
+    )
+    for mid in match_ids_desc:
+        t = col_totals.get(mid, 0.0)
+        color = "#0e6e24" if t > 0 else ("#a01414" if t < 0 else "#555")
+        val   = f"+{t:.2f}" if t > 0 else (f"{t:.2f}" if t < 0 else "0")
+        total_row_html += f'<td style="{td_tot};text-align:right;color:{color}">{val}</td>'
+
     table_html = f"""
     <style>
       .lb-table {{ width:100%; border-collapse:collapse; font-family:Arial,sans-serif; }}
@@ -208,11 +235,23 @@ def show_leaderboard(user: dict):
         <thead>
           <tr style="background:#28324f;color:#ffffff">{header_html}</tr>
         </thead>
-        <tbody>{rows_html}</tbody>
+        <tbody>
+          {rows_html}
+          <tr>{total_row_html}</tr>
+        </tbody>
       </table>
     </div>
     """
     st.html(table_html)
+
+    # Bank: negative of grand total (what pool retained or paid out extra)
+    bank = -grand_total
+    bank_str   = f"+{bank:.2f}" if bank > 0 else f"{bank:.2f}"
+    bank_color = "#0e6e24" if bank > 0 else ("#a01414" if bank < 0 else "#555")
+    st.markdown(
+        f"🏦 **Bank:** <span style='color:{bank_color};font-weight:700'>{bank_str}</span> pts",
+        unsafe_allow_html=True
+    )
 
     st.download_button(
         "⬇️ Download CSV", data=csv_bytes,
