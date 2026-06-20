@@ -98,8 +98,7 @@ def _count_prior_misses(user_id: str, match_id: str,
 
     first_vote_dt = min(voted_match_dts)
 
-    # Use passed quit_map if available (avoids extra GCS read),
-    # otherwise fetch fresh. Quit matches excluded from miss counting.
+    # Use passed quit_map if provided, otherwise fetch fresh from GCS
     effective_quit_map = quit_map if quit_map is not None else _get_quit_players(tournament_id)
 
     # Count matches that:
