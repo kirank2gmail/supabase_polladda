@@ -117,11 +117,12 @@ def _count_prior_misses(user_id: str, match_id: str,
 def _get_quit_players(tournament_id: str) -> dict:
     """
     Return {user_id: quit_at_iso} for players who quit this tournament.
-    Cached from registrations table.
+    Always reads fresh from GCS — bypasses session cache — so that quit
+    status set immediately before a recalculation is always visible.
     """
     return {
         r["user_id"]: r["quit_at"]
-        for r in read_table("registrations")
+        for r in read_table("registrations", force_fresh=True)
         if r.get("tournament_id") == tournament_id
         and r.get("quit_at")
     }
@@ -165,8 +166,7 @@ def _player_quit_before(user_id: str, match: dict,
 
 
 def calculate_match_points(match_id: str, tournament_id: str,
-                            winning_option: str,
-                            quit_map_override: dict = None) -> list[dict]:
+                            winning_option: str) -> list[dict]:
     tournament = _get_tournament(tournament_id)
     if not tournament:
         raise ValueError(f"Tournament {tournament_id} not found")
@@ -177,8 +177,8 @@ def calculate_match_points(match_id: str, tournament_id: str,
     allowed_misses = int(tournament.get("allowed_misses", 3))
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
-    # Players who quit — use override if provided (avoids stale cache after set_player_quit)
-    quit_map = quit_map_override if quit_map_override is not None else _get_quit_players(tournament_id)
+    # Players who quit — always reads fresh from GCS via _get_quit_players
+    quit_map = _get_quit_players(tournament_id)
 
     registered   = [r["user_id"] for r in _get_registrations(tournament_id)]
     votes        = _get_votes(match_id=match_id)
@@ -337,12 +337,10 @@ def _deduplicate_votes(match_id: str):
 
 
 def run_points_calculation(match_id: str, tournament_id: str,
-                            winning_option: str,
-                            quit_map_override: dict = None):
+                            winning_option: str):
     """
-    quit_map_override: if provided, uses this quit map directly instead of
-    reading from GCS. Use when calling immediately after set_player_quit
-    to avoid stale cache issues.
+    Dedup votes → check voters → calculate → save.
+    Returns ABANDONED sentinel when no votes exist.
     """
     """
     Dedup votes → check voters → calculate → save.
@@ -387,8 +385,7 @@ def run_points_calculation(match_id: str, tournament_id: str,
         return ABANDONED
 
     delete_match_points(match_id)
-    records = calculate_match_points(match_id, tournament_id, winning_option,
-                                      quit_map_override=quit_map_override)
+    records = calculate_match_points(match_id, tournament_id, winning_option)
     if records:
         save_points_batch(records)
     return records
