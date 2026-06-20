@@ -837,12 +837,18 @@ def _player_quit_tab():
                     except Exception as e:
                         errors.append(f"{m['match_id']}: {e}")
                 if errors:
-                    st.warning(f"⚠️ {len(errors)} error(s): {chr(59).join(errors[:3])}")
+                    st.warning(f"⚠️ {len(errors)} error(s): {'; '.join(errors[:3])}")
                 st.success(
                     f"**{sel_uname}** marked as quit from "
                     f"**{quit_date.strftime('%d %b %Y')} {quit_time.strftime('%I:%M %p')} IST**. "
                     f"{recalc_count} match(es) recalculated."
                 )
+                # Show debug info
+                dbg = st.session_state.get("_quit_debug", [])
+                if dbg:
+                    with st.expander("🔍 Debug: quit_map seen per match"):
+                        for d in dbg[-5:]:
+                            st.write(d)
                 st.rerun()
 
     st.markdown("---")
