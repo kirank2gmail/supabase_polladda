@@ -292,13 +292,17 @@ def send_poll_results(match: dict, votes: list[dict],
 
     # ── Total row for HTML ───────────────────────────────────────────────────
     grand_total = sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
-    col_totals_html = {}
-    for mid in last5_match_ids:
-        col_totals_html[mid] = sum(
-            float(r.get(mid, 0) or 0)
-            for r in leaderboard_rows
-            if isinstance(r.get(mid), (int, float))
-        )
+    def _cell_num_e(val) -> float:
+        if val is None or val in ("", "A", "miss"): return 0.0
+        if isinstance(val, (int, float)): return float(val)
+        if isinstance(val, str):
+            v = val.replace("−", "-").replace("–", "-")
+            try: return float(v)
+            except ValueError: return 0.0
+        return 0.0
+
+    col_totals_html = {mid: sum(_cell_num_e(r.get(mid)) for r in leaderboard_rows)
+                       for mid in last5_match_ids}
     bank        = -grand_total
     bank_str    = f"+{bank:.2f}" if bank >= 0 else f"{bank:.2f}"
     bank_color  = "#0e6e24" if bank > 0 else ("#a01414" if bank < 0 else "#555")
@@ -399,13 +403,8 @@ def send_leaderboard(match: dict, result: str,
 
     # ── Total row for PNG ────────────────────────────────────────────────────
     grand_total_png = sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
-    col_totals_png  = {}
-    for mid in last5_match_ids:
-        col_totals_png[mid] = sum(
-            float(r.get(mid, 0) or 0)
-            for r in leaderboard_rows
-            if isinstance(r.get(mid), (int, float))
-        )
+    col_totals_png = {mid: sum(_cell_num_e(r.get(mid)) for r in leaderboard_rows)
+                      for mid in last5_match_ids}
     bank_png     = -grand_total_png
     bank_str_png = f"+{bank_png:.2f}" if bank_png >= 0 else f"{bank_png:.2f}"
     gt_str_png   = f"+{grand_total_png:.2f}" if grand_total_png >= 0 else f"{grand_total_png:.2f}"
