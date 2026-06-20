@@ -130,6 +130,15 @@ def _sess_set(table: str, records: list[dict]):
 def _sess_clear(table: str):
     _sess().pop(table, None)
 
+def flush_cache():
+    """Clear ALL session and TTL caches. Use before any operation
+    that requires guaranteed fresh data from GCS."""
+    st.session_state.pop(SESSION_KEY, None)
+    try: _ttl_votes.clear()
+    except Exception: pass
+    try: _ttl_sessions.clear()
+    except Exception: pass
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
