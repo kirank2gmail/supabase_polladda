@@ -35,9 +35,7 @@ def _get_match(mid):
                  if m["match_id"] == mid), None)
 
 def _get_registrations(tid):
-    """Always reads fresh from GCS — bypasses cache for quit accuracy."""
-    from data.gcs import _fetch
-    return [r for r in _fetch("registrations")
+    return [r for r in read_table("registrations")
             if r["tournament_id"] == tid]
 
 def _get_votes(match_id=None, tournament_id=None):
@@ -60,8 +58,7 @@ def _now():
 
 
 def _count_prior_misses(user_id: str, match_id: str,
-                         tournament_id: str,
-                         quit_map: dict = None) -> int:
+                         tournament_id: str) -> int:
     """
     Count matches this user missed BEFORE match_id in this tournament.
 
@@ -100,73 +97,18 @@ def _count_prior_misses(user_id: str, match_id: str,
 
     first_vote_dt = min(voted_match_dts)
 
-    # Use passed quit_map if provided, otherwise fetch fresh from GCS
-    effective_quit_map = quit_map if quit_map is not None else _get_quit_players(tournament_id)
-
     # Count matches that:
     #   1. Started strictly AFTER the player's first voted match
+    #      (matches before first vote don't count — player wasn't participating)
     #   2. Started strictly BEFORE this match
     #   3. Player did not vote in
-    #   4. Player was NOT quit at that match's time
     return sum(
         1 for m in all_matches
         if m["match_id"] != match_id
         and f"{m['match_date']} {m['start_time']}" > first_vote_dt
         and f"{m['match_date']} {m['start_time']}" < this_dt
         and m["match_id"] not in voted_ids
-        and not _player_quit_before(user_id, m, effective_quit_map)
     )
-def _get_quit_players(tournament_id: str) -> dict:
-    """
-    Return {user_id: quit_at_iso} for players who quit this tournament.
-    Always reads fresh from GCS — bypasses session cache — so that quit
-    status set immediately before a recalculation is always visible.
-    """
-    return {
-        r["user_id"]: r["quit_at"]
-        for r in _fetch("registrations")
-        if r.get("tournament_id") == tournament_id
-        and r.get("quit_at")
-    }
-
-
-def _player_quit_before(user_id: str, match: dict,
-                         quit_map: dict) -> bool:
-    """
-    True if this player quit at or before the match start time.
-    Both quit_at (stored as UTC ISO) and match start time are converted
-    to UTC for accurate cross-timezone comparison.
-    """
-    quit_at = quit_map.get(user_id, "")
-    if not quit_at:
-        return False
-    try:
-        from datetime import datetime, timezone
-        import pytz
-
-        # Parse quit time (stored as UTC ISO)
-        quit_dt = datetime.fromisoformat(quit_at)
-        if quit_dt.tzinfo is None:
-            quit_dt = quit_dt.replace(tzinfo=timezone.utc)
-        quit_utc = quit_dt.astimezone(timezone.utc)
-
-        # Convert match start time to UTC using match's own timezone
-        tz_name  = match.get("timezone") or "Asia/Kolkata"
-        match_tz = pytz.timezone(tz_name)
-        naive_dt = datetime.strptime(
-            f"{match['match_date']} {match['start_time']}", "%Y-%m-%d %H:%M"
-        )
-        match_utc = match_tz.localize(naive_dt).astimezone(timezone.utc)
-
-        return quit_utc <= match_utc
-    except Exception:
-        # Fallback: compare as ISO strings (less accurate but safe)
-        try:
-            return quit_at[:16] <= f"{match['match_date']} {match['start_time']}"
-        except Exception:
-            return False
-
-
 def calculate_match_points(match_id: str, tournament_id: str,
                             winning_option: str) -> list[dict]:
     tournament = _get_tournament(tournament_id)
@@ -179,32 +121,13 @@ def calculate_match_points(match_id: str, tournament_id: str,
     allowed_misses = int(tournament.get("allowed_misses", 3))
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
-    # Players who quit — always reads fresh from GCS via _get_quit_players
-    quit_map = _get_quit_players(tournament_id)
-
     registered   = [r["user_id"] for r in _get_registrations(tournament_id)]
     votes        = _get_votes(match_id=match_id)
+    voted_users  = {v["user_id"] for v in votes}
+    missed_users = [u for u in registered if u not in voted_users]
 
-    # Exclude quit players from votes and missed calculation
-    # Quit players get 0 points for all matches after their quit time
-    active_registered = [
-        u for u in registered
-        if not _player_quit_before(u, match, quit_map)
-    ]
-    quit_in_match = [
-        u for u in registered
-        if _player_quit_before(u, match, quit_map)
-    ]
-
-    voted_users  = {v["user_id"] for v in votes if v["user_id"] in active_registered}
-    missed_users = [u for u in active_registered if u not in voted_users]
-
-    winner_votes = [v for v in votes
-                    if v["vote"] == winning_option
-                    and v["user_id"] in active_registered]
-    loser_votes  = [v for v in votes
-                    if v["vote"] != winning_option
-                    and v["user_id"] in active_registered]
+    winner_votes = [v for v in votes if v["vote"] == winning_option]
+    loser_votes  = [v for v in votes if v["vote"] != winning_option]
     n_winners    = len(winner_votes)
 
     results    = []
@@ -212,7 +135,7 @@ def calculate_match_points(match_id: str, tournament_id: str,
 
     # ── Missed voters ─────────────────────────────────────────────────────────
     for user_id in missed_users:
-        prior = _count_prior_misses(user_id, match_id, tournament_id, quit_map)
+        prior = _count_prior_misses(user_id, match_id, tournament_id)
         if prior >= allowed_misses:
             dest = "winner pool" if scoring_mode == "ratio" else "bank"
             if scoring_mode == "ratio":
@@ -263,16 +186,6 @@ def calculate_match_points(match_id: str, tournament_id: str,
             "base_points": total_win, "penalty_points": 0,
             "bonus_points": 0, "total_points": total_win,
             "note": note_win,
-        })
-
-    # ── Quit players — 0 points, excluded from pool ──────────────────────────
-    for user_id in quit_in_match:
-        results.append({
-            "user_id": user_id, "match_id": match_id,
-            "tournament_id": tournament_id,
-            "base_points": 0, "penalty_points": 0,
-            "bonus_points": 0, "total_points": 0,
-            "note": "quit",
         })
 
     return results
@@ -340,10 +253,6 @@ def _deduplicate_votes(match_id: str):
 
 def run_points_calculation(match_id: str, tournament_id: str,
                             winning_option: str):
-    """
-    Dedup votes → check voters → calculate → save.
-    Returns ABANDONED sentinel when no votes exist.
-    """
     """
     Dedup votes → check voters → calculate → save.
     Returns ABANDONED (sentinel string) when no votes exist.

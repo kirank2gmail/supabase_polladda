@@ -130,35 +130,17 @@ def _sess_set(table: str, records: list[dict]):
 def _sess_clear(table: str):
     _sess().pop(table, None)
 
-def flush_cache():
-    """Clear ALL caches. Call before any operation needing guaranteed
-    fresh data from GCS (e.g. player quit recalculation)."""
-    st.session_state.pop(SESSION_KEY, None)
-    try: _ttl_votes.clear()
-    except Exception: pass
-    try: _ttl_sessions.clear()
-    except Exception: pass
-
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def read_table(table: str, force_fresh: bool = False) -> list[dict]:
+def read_table(table: str) -> list[dict]:
     """
     Read a table using the appropriate cache tier.
 
     votes    → 30s TTL (other users vote concurrently)
     sessions → 60s TTL (auth, rarely changes)
     others   → session cache (loaded once, stays for session)
-
-    force_fresh=True bypasses all caches and reads directly from GCS.
-    Use after writes that must be immediately visible (e.g. player quit).
     """
-    if force_fresh:
-        data = _fetch(table)
-        # Also update session cache so subsequent reads in this run are consistent
-        if table in SESSION_TBLS:
-            _sess_set(table, data)
-        return data
     if table == "votes":    return _ttl_votes()
     if table == "sessions": return _ttl_sessions()
     if table in SESSION_TBLS: return _sess_get(table)
