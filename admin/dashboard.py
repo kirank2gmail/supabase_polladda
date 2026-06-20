@@ -795,29 +795,33 @@ def _player_quit_tab():
             sel_uname   = st.selectbox("Player", user_names, key=f"quit_user_{sel_tid}")
             sel_user    = active_users[user_names.index(sel_uname)]
 
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(timezone.utc).astimezone(ist)
+
             c1, c2 = st.columns(2)
-            quit_date = c1.date_input("Quit Date", value=datetime.now(timezone.utc).date(),
+            quit_date = c1.date_input("Quit Date", value=now_ist.date(),
                                        key="quit_date")
             quit_time = c2.time_input("Quit Time (IST)", key="quit_time",
-                                       value=datetime.now(timezone.utc).time())
+                                       value=now_ist.time().replace(second=0, microsecond=0))
 
-            st.caption("ℹ️ Time is in IST (Asia/Kolkata). All matches at or after this time will give 0 points.")
+            st.caption("ℹ️ Time is in IST (Asia/Kolkata). All matches starting at or after this time will give 0 points.")
 
             if st.form_submit_button("Mark as Quit", type="primary"):
-                # Convert IST input to UTC ISO
-                ist = pytz.timezone("Asia/Kolkata")
+                # Convert IST input to UTC ISO for storage
                 naive_dt = datetime.combine(quit_date, quit_time)
-                aware_dt = ist.localize(naive_dt).astimezone(timezone.utc)
-                quit_iso = aware_dt.isoformat()
+                aware_ist = ist.localize(naive_dt)
+                aware_utc = aware_ist.astimezone(timezone.utc)
+                quit_iso  = aware_utc.isoformat()
 
                 set_player_quit(sel_user["user_id"], sel_tid, quit_iso)
 
-                # Recalculate all completed matches after quit time
-                match_dt_str = aware_dt.strftime("%Y-%m-%d %H:%M")
+                # Find affected matches: compare match start time (converted to UTC)
+                # against quit time (UTC) for accurate cross-timezone comparison
+                from utils.timezone import get_match_cutoff_utc
                 affected = [
                     m for m in all_ms
                     if m["status"] == "completed"
-                    and f"{m['match_date']} {m['start_time']}" >= match_dt_str
+                    and get_match_cutoff_utc(m) >= aware_utc
                 ]
                 recalc_count = 0
                 for m in sorted(affected, key=lambda x: x["match_date"] + " " + x["start_time"]):
@@ -865,11 +869,11 @@ def _player_quit_tab():
                           help="Remove quit status and recalculate"):
                 remove_player_quit(q["user_id"], sel_tid)
                 # Recalculate all completed matches
-                match_dt_str = dt_utc.strftime("%Y-%m-%d %H:%M")
+                from utils.timezone import get_match_cutoff_utc
                 affected = [
                     m for m in all_ms
                     if m["status"] == "completed"
-                    and f"{m['match_date']} {m['start_time']}" >= match_dt_str
+                    and get_match_cutoff_utc(m) >= dt_utc
                 ]
                 for m in sorted(affected, key=lambda x: x["match_date"] + " " + x["start_time"]):
                     try:
