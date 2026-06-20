@@ -165,7 +165,8 @@ def _player_quit_before(user_id: str, match: dict,
 
 
 def calculate_match_points(match_id: str, tournament_id: str,
-                            winning_option: str) -> list[dict]:
+                            winning_option: str,
+                            quit_map_override: dict = None) -> list[dict]:
     tournament = _get_tournament(tournament_id)
     if not tournament:
         raise ValueError(f"Tournament {tournament_id} not found")
@@ -176,8 +177,8 @@ def calculate_match_points(match_id: str, tournament_id: str,
     allowed_misses = int(tournament.get("allowed_misses", 3))
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
-    # Players who quit — get their quit timestamps
-    quit_map = _get_quit_players(tournament_id)
+    # Players who quit — use override if provided (avoids stale cache after set_player_quit)
+    quit_map = quit_map_override if quit_map_override is not None else _get_quit_players(tournament_id)
 
     registered   = [r["user_id"] for r in _get_registrations(tournament_id)]
     votes        = _get_votes(match_id=match_id)
@@ -336,7 +337,13 @@ def _deduplicate_votes(match_id: str):
 
 
 def run_points_calculation(match_id: str, tournament_id: str,
-                            winning_option: str):
+                            winning_option: str,
+                            quit_map_override: dict = None):
+    """
+    quit_map_override: if provided, uses this quit map directly instead of
+    reading from GCS. Use when calling immediately after set_player_quit
+    to avoid stale cache issues.
+    """
     """
     Dedup votes → check voters → calculate → save.
     Returns ABANDONED (sentinel string) when no votes exist.
@@ -380,7 +387,8 @@ def run_points_calculation(match_id: str, tournament_id: str,
         return ABANDONED
 
     delete_match_points(match_id)
-    records = calculate_match_points(match_id, tournament_id, winning_option)
+    records = calculate_match_points(match_id, tournament_id, winning_option,
+                                      quit_map_override=quit_map_override)
     if records:
         save_points_batch(records)
     return records
