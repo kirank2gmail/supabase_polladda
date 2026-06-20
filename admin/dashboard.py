@@ -843,13 +843,11 @@ def _player_quit_tab():
                     f"**{quit_date.strftime('%d %b %Y')} {quit_time.strftime('%I:%M %p')} IST**. "
                     f"{recalc_count} match(es) recalculated."
                 )
-                # Show debug info
+                # DEBUG: show what quit_map looked like per match — NO st.rerun() so this stays visible
                 dbg = st.session_state.get("_quit_debug", [])
-                if dbg:
-                    with st.expander("🔍 Debug: quit_map seen per match"):
-                        for d in dbg[-5:]:
-                            st.write(d)
-                st.rerun()
+                st.write(f"**DEBUG — quit_map had {len(dbg)} entries**")
+                for d in dbg:
+                    st.write(d)
 
     st.markdown("---")
 
