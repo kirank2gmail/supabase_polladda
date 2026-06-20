@@ -200,13 +200,20 @@ def show_leaderboard(user: dict):
     # ── Total row ────────────────────────────────────────────────────────────
     # Sum each player's points per match column
     # Bank = negative of the grand total (what wasn't distributed)
+    def _cell_num(val) -> float:
+        """Extract numeric value from any cell — handles float, int, '−0.5', 'miss', 'A', None."""
+        if val is None or val in ("", "A", "miss"): return 0.0
+        if isinstance(val, (int, float)): return float(val)
+        if isinstance(val, str):
+            # Unicode minus e.g. "−0.5"
+            v = val.replace("−", "-").replace("–", "-")
+            try: return float(v)
+            except ValueError: return 0.0
+        return 0.0
+
     col_totals = {}
     for mid in match_ids_desc:
-        col_totals[mid] = sum(
-            float(row.get(mid, 0) or 0)
-            for row in lb
-            if isinstance(row.get(mid), (int, float))
-        )
+        col_totals[mid] = sum(_cell_num(row.get(mid)) for row in lb)
     grand_total = sum(float(row.get("total_points", 0)) for row in lb)
 
     td_tot = "padding:9px 12px;font-size:14px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff;white-space:nowrap"
