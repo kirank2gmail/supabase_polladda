@@ -97,17 +97,22 @@ def _count_prior_misses(user_id: str, match_id: str,
 
     first_vote_dt = min(voted_match_dts)
 
+    # Get quit map to exclude quit matches from miss counting
+    quit_map_for_misses = _get_quit_players(tournament_id)
+
     # Count matches that:
     #   1. Started strictly AFTER the player's first voted match
-    #      (matches before first vote don't count — player wasn't participating)
     #   2. Started strictly BEFORE this match
     #   3. Player did not vote in
+    #   4. Player was NOT quit at that match's time
+    #      (quit matches are not counted as misses)
     return sum(
         1 for m in all_matches
         if m["match_id"] != match_id
         and f"{m['match_date']} {m['start_time']}" > first_vote_dt
         and f"{m['match_date']} {m['start_time']}" < this_dt
         and m["match_id"] not in voted_ids
+        and not _player_quit_before(user_id, m, quit_map_for_misses)
     )
 def _get_quit_players(tournament_id: str) -> dict:
     """
@@ -127,7 +132,7 @@ def _player_quit_before(user_id: str, match: dict,
     """
     True if this player quit at or before the match start time.
     Both quit_at (stored as UTC ISO) and match start time are converted
-    to UTC for an accurate comparison regardless of match timezone.
+    to UTC for accurate cross-timezone comparison.
     """
     quit_at = quit_map.get(user_id, "")
     if not quit_at:
@@ -143,15 +148,20 @@ def _player_quit_before(user_id: str, match: dict,
         quit_utc = quit_dt.astimezone(timezone.utc)
 
         # Convert match start time to UTC using match's own timezone
-        match_tz  = pytz.timezone(match.get("timezone", "UTC"))
-        naive_dt  = datetime.strptime(
+        tz_name  = match.get("timezone") or "Asia/Kolkata"
+        match_tz = pytz.timezone(tz_name)
+        naive_dt = datetime.strptime(
             f"{match['match_date']} {match['start_time']}", "%Y-%m-%d %H:%M"
         )
         match_utc = match_tz.localize(naive_dt).astimezone(timezone.utc)
 
         return quit_utc <= match_utc
     except Exception:
-        return False
+        # Fallback: compare as ISO strings (less accurate but safe)
+        try:
+            return quit_at[:16] <= f"{match['match_date']} {match['start_time']}"
+        except Exception:
+            return False
 
 
 def calculate_match_points(match_id: str, tournament_id: str,
