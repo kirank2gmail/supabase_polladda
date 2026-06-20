@@ -487,11 +487,15 @@ def _single_form(tid: str, user: dict):
 def _recalculate_tournament(sel_tid: str):
     """
     Recalculate points for ALL completed/abandoned matches in a tournament
-    in chronological order. Abandoned matches (no votes) are detected
-    automatically and marked accordingly.
+    in chronological order.
+
+    Uses match_players.json (read fresh from GCS per match) — no cache.
     Returns tuple (recalc_count, abandoned_count, error_count).
     """
-    all_ms = get_matches(sel_tid)
+    from data.gcs import _fetch
+    # Read matches fresh from GCS — no cache
+    all_ms = _fetch("matches")
+    all_ms = [m for m in all_ms if m.get("tournament_id") == sel_tid]
     done   = sorted(
         [m for m in all_ms if m["status"] in ("completed", "abandoned")
          and m.get("result") not in ("", None)],
@@ -500,7 +504,6 @@ def _recalculate_tournament(sel_tid: str):
     recalc = abandoned = errors = 0
     for m in done:
         if m.get("status") == "abandoned" and m.get("result") == "abandoned":
-            # Already abandoned — just clear stale points
             from data.db import delete_match_points as _dmp
             _dmp(m["match_id"])
             abandoned += 1
@@ -512,7 +515,7 @@ def _recalculate_tournament(sel_tid: str):
                 abandoned += 1
             else:
                 recalc += 1
-        except Exception:
+        except Exception as e:
             errors += 1
     return recalc, abandoned, errors
 
@@ -539,14 +542,47 @@ def _results_tab():
 
     FRAME_H = 400   # scrollable frame height
 
+    # ── Setup: Build match_players.json (one-time migration) ────────────────
+    with st.expander("🔧 Setup: Build match_players (run once after deploy)"):
+        st.caption(
+            "Builds match_players.json from existing votes.json. "
+            "Run once after deploying this update. Safe to run multiple times."
+        )
+        if st.button("▶️ Run Migration", key="migrate_mp_btn"):
+            try:
+                from data.gcs import _fetch, _push
+                import uuid
+                from datetime import datetime, timezone
+                votes    = _fetch("votes")
+                existing = _fetch("match_players")
+                ekeys    = {(r["user_id"], r["match_id"]) for r in existing}
+                new_recs = []
+                for v in votes:
+                    key = (v["user_id"], v["match_id"])
+                    if key not in ekeys:
+                        new_recs.append({
+                            "mp_id"        : str(uuid.uuid4())[:8],
+                            "match_id"     : v["match_id"],
+                            "tournament_id": v.get("tournament_id", ""),
+                            "user_id"      : v["user_id"],
+                            "status"       : "active",
+                            "joined_at"    : v.get("voted_at",
+                                             datetime.now(timezone.utc).isoformat()),
+                            "quit_at"      : "",
+                        })
+                        ekeys.add(key)
+                _push("match_players", existing + new_recs)
+                st.success(f"✅ Migration done — {len(new_recs)} records created.")
+            except Exception as e:
+                st.error(f"Migration failed: {e}")
+
     # ── Tournament-level Recalculate ──────────────────────────────────────────
     with st.container(border=True):
         c1, c2 = st.columns([3, 1])
         c1.markdown("**🔄 Recalculate All Points**")
         c1.caption(
             "Recalculates points for every completed match in this tournament "
-            "in chronological order. Use after correcting votes or when a "
-            "new player joins mid-tournament."
+            "in chronological order. Uses match_players.json (fresh from GCS)."
         )
         if c2.button("Recalculate Tournament", type="primary",
                      key="recalc_all", use_container_width=True):
