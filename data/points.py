@@ -58,7 +58,8 @@ def _now():
 
 
 def _count_prior_misses(user_id: str, match_id: str,
-                         tournament_id: str) -> int:
+                         tournament_id: str,
+                         quit_map: dict = None) -> int:
     """
     Count matches this user missed BEFORE match_id in this tournament.
 
@@ -97,22 +98,22 @@ def _count_prior_misses(user_id: str, match_id: str,
 
     first_vote_dt = min(voted_match_dts)
 
-    # Get quit map to exclude quit matches from miss counting
-    quit_map_for_misses = _get_quit_players(tournament_id)
+    # Use passed quit_map if available (avoids extra GCS read),
+    # otherwise fetch fresh. Quit matches excluded from miss counting.
+    effective_quit_map = quit_map if quit_map is not None else _get_quit_players(tournament_id)
 
     # Count matches that:
     #   1. Started strictly AFTER the player's first voted match
     #   2. Started strictly BEFORE this match
     #   3. Player did not vote in
     #   4. Player was NOT quit at that match's time
-    #      (quit matches are not counted as misses)
     return sum(
         1 for m in all_matches
         if m["match_id"] != match_id
         and f"{m['match_date']} {m['start_time']}" > first_vote_dt
         and f"{m['match_date']} {m['start_time']}" < this_dt
         and m["match_id"] not in voted_ids
-        and not _player_quit_before(user_id, m, quit_map_for_misses)
+        and not _player_quit_before(user_id, m, effective_quit_map)
     )
 def _get_quit_players(tournament_id: str) -> dict:
     """
@@ -210,7 +211,7 @@ def calculate_match_points(match_id: str, tournament_id: str,
 
     # ── Missed voters ─────────────────────────────────────────────────────────
     for user_id in missed_users:
-        prior = _count_prior_misses(user_id, match_id, tournament_id)
+        prior = _count_prior_misses(user_id, match_id, tournament_id, quit_map)
         if prior >= allowed_misses:
             dest = "winner pool" if scoring_mode == "ratio" else "bank"
             if scoring_mode == "ratio":
