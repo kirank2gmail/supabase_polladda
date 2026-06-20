@@ -35,7 +35,9 @@ def _get_match(mid):
                  if m["match_id"] == mid), None)
 
 def _get_registrations(tid):
-    return [r for r in read_table("registrations")
+    """Always reads fresh from GCS — bypasses cache for quit accuracy."""
+    from data.gcs import _fetch
+    return [r for r in _fetch("registrations")
             if r["tournament_id"] == tid]
 
 def _get_votes(match_id=None, tournament_id=None):
@@ -122,7 +124,7 @@ def _get_quit_players(tournament_id: str) -> dict:
     """
     return {
         r["user_id"]: r["quit_at"]
-        for r in read_table("registrations", force_fresh=True)
+        for r in _fetch("registrations")
         if r.get("tournament_id") == tournament_id
         and r.get("quit_at")
     }
@@ -182,18 +184,6 @@ def calculate_match_points(match_id: str, tournament_id: str,
 
     registered   = [r["user_id"] for r in _get_registrations(tournament_id)]
     votes        = _get_votes(match_id=match_id)
-
-    # DEBUG: log quit_map and match details to session state for admin visibility
-    import streamlit as st
-    _dbg = st.session_state.setdefault("_quit_debug", [])
-    _dbg.append({
-        "match_id"  : match_id,
-        "match_date": match.get("match_date"),
-        "start_time": match.get("start_time"),
-        "timezone"  : match.get("timezone"),
-        "quit_map"  : dict(quit_map),
-    })
-    if len(_dbg) > 50: st.session_state["_quit_debug"] = _dbg[-50:]
 
     # Exclude quit players from votes and missed calculation
     # Quit players get 0 points for all matches after their quit time
