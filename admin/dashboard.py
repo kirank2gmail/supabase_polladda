@@ -17,9 +17,7 @@ from data.db import (
     get_votes, delete_vote, get_user_by_id, verify_password
 )
 from data.points import run_points_calculation, ABANDONED
-from data.db    import (mark_match_abandoned, set_player_quit,
-                         remove_player_quit, get_quit_players)
-from data.gcs   import flush_cache
+from data.db    import mark_match_abandoned
 from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
 )
@@ -74,14 +72,13 @@ def _validate_options(s: str) -> tuple[bool, str]:
 def show_admin(user: dict):
     st.title("⚙️ Admin Panel")
     st.caption(f"Logged in as **{get_display_name(user['user_id'])}**")
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "👥 Users", "🏆 Tournaments", "📋 Matches", "🎯 Results", "⛔ Player Quit"
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "👥 Users", "🏆 Tournaments", "📋 Matches", "🎯 Results"
     ])
     with tab1: _users_tab(user)
     with tab2: _tournaments_tab(user)
     with tab3: _matches_tab(user)
     with tab4: _results_tab()
-    with tab5: _player_quit_tab()
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -743,150 +740,3 @@ def _send_result_emails(match: dict, result: str,
 
     except Exception as e:
         st.warning(f"Email preparation failed: {e}")
-
-
-# ── Player Quit ───────────────────────────────────────────────────────────────
-
-def _player_quit_tab():
-    """
-    Admin can mark a player as quit with a date/time.
-    All matches starting after the quit time give the player 0 points.
-    Points are recalculated immediately for all affected matches.
-    """
-    from datetime import datetime, timezone
-    import pytz
-
-    ts = get_tournaments()
-    if not ts:
-        st.warning("No tournaments found.")
-        return
-
-    t_names = [t["name"] for t in ts]
-    t_ids   = [t["tournament_id"] for t in ts]
-    sel_n   = st.selectbox("Tournament", t_names, key="quit_t")
-    sel_tid = t_ids[t_names.index(sel_n)]
-
-    all_ms    = get_matches(sel_tid)
-    all_users = get_all_users()
-    quit_list = get_quit_players(sel_tid)
-    quit_map  = {q["user_id"]: q["quit_at"] for q in quit_list}
-
-    # Only show users registered for this specific tournament
-    from data.db import get_registrations
-    registered_ids = {r["user_id"] for r in get_registrations(sel_tid)}
-    tournament_users = [u for u in all_users if u["user_id"] in registered_ids]
-
-    # ── Section 1: Mark a player as quit ──────────────────────────────────────
-    st.subheader("⛔ Mark Player as Quit")
-    st.caption(
-        "Player gets 0 points for all matches starting at or after the quit time. "
-        "Missed/penalty rules no longer apply to them."
-    )
-
-    # Use sel_tid in form key so form resets when tournament changes
-    with st.form(f"quit_form_{sel_tid}"):
-        # Only show registered players not already quit
-        active_users = [u for u in tournament_users
-                        if u["user_id"] not in quit_map]
-        if not active_users:
-            st.info("All registered players have already quit this tournament.")
-            st.form_submit_button("Mark as Quit", disabled=True)
-        else:
-            user_names  = [u["name"] for u in active_users]
-            sel_uname   = st.selectbox("Player", user_names, key=f"quit_user_{sel_tid}")
-            sel_user    = active_users[user_names.index(sel_uname)]
-
-            ist = pytz.timezone("Asia/Kolkata")
-            now_ist = datetime.now(timezone.utc).astimezone(ist)
-
-            c1, c2 = st.columns(2)
-            quit_date = c1.date_input("Quit Date", value=now_ist.date(),
-                                       key="quit_date")
-            quit_time = c2.time_input("Quit Time (IST)", key="quit_time",
-                                       value=now_ist.time().replace(second=0, microsecond=0))
-
-            st.caption("ℹ️ Time is in IST (Asia/Kolkata). All matches starting at or after this time will give 0 points.")
-
-            if st.form_submit_button("Mark as Quit", type="primary"):
-                # Convert IST input to UTC ISO for storage
-                naive_dt = datetime.combine(quit_date, quit_time)
-                aware_ist = ist.localize(naive_dt)
-                aware_utc = aware_ist.astimezone(timezone.utc)
-                quit_iso  = aware_utc.isoformat()
-
-                # Flush ALL caches so every subsequent read is fresh from GCS
-                flush_cache()
-
-                set_player_quit(sel_user["user_id"], sel_tid, quit_iso)
-
-                # Recalculate ALL completed matches — _player_quit_before()
-                # inside calculate_match_points handles Q vs normal points.
-                all_completed = sorted(
-                    [m for m in all_ms if m["status"] == "completed"],
-                    key=lambda x: x["match_date"] + " " + x["start_time"]
-                )
-                recalc_count = 0
-                errors = []
-                for m in all_completed:
-                    try:
-                        result = run_points_calculation(
-                            m["match_id"], sel_tid, m["result"]
-                        )
-                        if result is not ABANDONED:
-                            recalc_count += 1
-                    except Exception as e:
-                        errors.append(f"{m['match_id']}: {e}")
-                if errors:
-                    st.warning(f"⚠️ {len(errors)} error(s): {'; '.join(errors[:3])}")
-                st.success(
-                    f"**{sel_uname}** marked as quit from "
-                    f"**{quit_date.strftime('%d %b %Y')} {quit_time.strftime('%I:%M %p')} IST**. "
-                    f"{recalc_count} match(es) recalculated."
-                )
-                # DEBUG: show what quit_map looked like per match — NO st.rerun() so this stays visible
-                dbg = st.session_state.get("_quit_debug", [])
-                st.write(f"**DEBUG — quit_map had {len(dbg)} entries**")
-                for d in dbg:
-                    st.write(d)
-
-    st.markdown("---")
-
-    # ── Section 2: Currently quit players ─────────────────────────────────────
-    st.subheader("📋 Quit Players")
-    if not quit_list:
-        st.caption("No players have quit this tournament.")
-        return
-
-    ist = pytz.timezone("Asia/Kolkata")
-    for q in quit_list:
-        u = next((x for x in all_users if x["user_id"] == q["user_id"]), None)
-        name = u["name"] if u else q["user_id"]
-        # Format quit time in IST
-        try:
-            dt_utc = datetime.fromisoformat(q["quit_at"])
-            if dt_utc.tzinfo is None:
-                dt_utc = dt_utc.replace(tzinfo=timezone.utc)
-            dt_ist = dt_utc.astimezone(ist)
-            quit_display = dt_ist.strftime("%d %b %Y %I:%M %p IST")
-        except Exception:
-            quit_display = q["quit_at"]
-
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([3, 3, 2])
-            c1.markdown(f"**{name}**")
-            c2.caption(f"Quit from: {quit_display}")
-            if c3.button("↩️ Reinstate", key=f"reinstate_{q['user_id']}",
-                          help="Remove quit status and recalculate"):
-                flush_cache()
-                remove_player_quit(q["user_id"], sel_tid)
-                all_completed_r = sorted(
-                    [m for m in all_ms if m["status"] == "completed"],
-                    key=lambda x: x["match_date"] + " " + x["start_time"]
-                )
-                for m in all_completed_r:
-                    try:
-                        run_points_calculation(m["match_id"], sel_tid, m["result"])
-                    except Exception:
-                        pass
-                st.success(f"**{name}** reinstated. Points recalculated.")
-                st.rerun()
