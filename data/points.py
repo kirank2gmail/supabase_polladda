@@ -122,27 +122,36 @@ def _get_quit_players(tournament_id: str) -> dict:
     }
 
 
-def _player_quit_before(user_id: str, match_dt: str,
+def _player_quit_before(user_id: str, match: dict,
                          quit_map: dict) -> bool:
     """
-    True if this player quit before the match start time.
-    match_dt format: "YYYY-MM-DD HH:MM"
-    quit_at format: ISO UTC e.g. "2026-06-18T14:30:00+00:00"
-    We compare naively as strings after normalising to "YYYY-MM-DD HH:MM".
+    True if this player quit at or before the match start time.
+    Both quit_at (stored as UTC ISO) and match start time are converted
+    to UTC for an accurate comparison regardless of match timezone.
     """
     quit_at = quit_map.get(user_id, "")
     if not quit_at:
         return False
-    # Normalise quit_at to "YYYY-MM-DD HH:MM" for comparison
     try:
         from datetime import datetime, timezone
-        dt = datetime.fromisoformat(quit_at)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        quit_str = dt.strftime("%Y-%m-%d %H:%M")
+        import pytz
+
+        # Parse quit time (stored as UTC ISO)
+        quit_dt = datetime.fromisoformat(quit_at)
+        if quit_dt.tzinfo is None:
+            quit_dt = quit_dt.replace(tzinfo=timezone.utc)
+        quit_utc = quit_dt.astimezone(timezone.utc)
+
+        # Convert match start time to UTC using match's own timezone
+        match_tz  = pytz.timezone(match.get("timezone", "UTC"))
+        naive_dt  = datetime.strptime(
+            f"{match['match_date']} {match['start_time']}", "%Y-%m-%d %H:%M"
+        )
+        match_utc = match_tz.localize(naive_dt).astimezone(timezone.utc)
+
+        return quit_utc <= match_utc
     except Exception:
-        quit_str = quit_at[:16]
-    return quit_str <= match_dt
+        return False
 
 
 def calculate_match_points(match_id: str, tournament_id: str,
@@ -159,7 +168,6 @@ def calculate_match_points(match_id: str, tournament_id: str,
 
     # Players who quit — get their quit timestamps
     quit_map = _get_quit_players(tournament_id)
-    match_dt = f"{match.get('match_date', '')} {match.get('start_time', '')}"
 
     registered   = [r["user_id"] for r in _get_registrations(tournament_id)]
     votes        = _get_votes(match_id=match_id)
@@ -168,11 +176,11 @@ def calculate_match_points(match_id: str, tournament_id: str,
     # Quit players get 0 points for all matches after their quit time
     active_registered = [
         u for u in registered
-        if not _player_quit_before(u, match_dt, quit_map)
+        if not _player_quit_before(u, match, quit_map)
     ]
     quit_in_match = [
         u for u in registered
-        if _player_quit_before(u, match_dt, quit_map)
+        if _player_quit_before(u, match, quit_map)
     ]
 
     voted_users  = {v["user_id"] for v in votes if v["user_id"] in active_registered}
