@@ -19,6 +19,7 @@ from data.db import (
 from data.points import run_points_calculation, ABANDONED
 from data.db    import (mark_match_abandoned, set_player_quit,
                          remove_player_quit, get_quit_players)
+from data.gcs   import flush_cache
 from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
 )
@@ -813,11 +814,15 @@ def _player_quit_tab():
                 aware_utc = aware_ist.astimezone(timezone.utc)
                 quit_iso  = aware_utc.isoformat()
 
+                # Flush ALL caches before writing quit status and recalculating
+                # This guarantees every subsequent read gets fresh data from GCS
+                flush_cache()
+
                 set_player_quit(sel_user["user_id"], sel_tid, quit_iso)
 
                 # Recalculate ALL completed matches in chronological order.
-                # _player_quit_before() inside calculate_match_points handles
-                # which matches give Q vs normal points — no need to filter here.
+                # _player_quit_before() inside calculate_match_points determines
+                # which matches give Q vs normal points — no pre-filtering needed.
                 all_completed = sorted(
                     [m for m in all_ms if m["status"] == "completed"],
                     key=lambda x: x["match_date"] + " " + x["start_time"]
@@ -835,7 +840,7 @@ def _player_quit_tab():
                         errors.append(f"{m['match_id']}: {e}")
 
                 if errors:
-                    st.warning(f"⚠️ {len(errors)} match(es) had errors: {'; '.join(errors[:3])}")
+                    st.warning(f"⚠️ {len(errors)} error(s): {'; '.join(errors[:3])}")
                 st.success(
                     f"**{sel_uname}** marked as quit from "
                     f"**{quit_date.strftime('%d %b %Y')} {quit_time.strftime('%I:%M %p')} IST**. "
@@ -871,8 +876,8 @@ def _player_quit_tab():
             c2.caption(f"Quit from: {quit_display}")
             if c3.button("↩️ Reinstate", key=f"reinstate_{q['user_id']}",
                           help="Remove quit status and recalculate"):
+                flush_cache()
                 remove_player_quit(q["user_id"], sel_tid)
-                # Recalculate all completed matches
                 all_completed = sorted(
                     [m for m in all_ms if m["status"] == "completed"],
                     key=lambda x: x["match_date"] + " " + x["start_time"]
