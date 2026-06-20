@@ -187,122 +187,6 @@ def register_user(user_id: str, tid: str):
     ensure_registered(user_id, tid)
 
 
-# ── Match players ─────────────────────────────────────────────────────────────
-# match_players.json tracks which players are active for which matches.
-# One record per (match_id, user_id). Status: "active" | "quit".
-# Written when a player first votes in a match (via cast_vote).
-# Updated when a player is marked as quit.
-# Points calculation reads only this table — no registrations, no cache needed.
-
-def get_match_players(match_id: str = None,
-                       tournament_id: str = None,
-                       user_id: str = None) -> list[dict]:
-    """Read match_players directly from GCS (no cache)."""
-    from data.gcs import _fetch
-    rows = _fetch("match_players")
-    if match_id:      rows = [r for r in rows if r["match_id"] == match_id]
-    if tournament_id: rows = [r for r in rows if r["tournament_id"] == tournament_id]
-    if user_id:       rows = [r for r in rows if r["user_id"] == user_id]
-    return rows
-
-def _write_match_players(rows: list[dict]):
-    """Write match_players directly to GCS (no cache)."""
-    from data.gcs import _push
-    _push("match_players", rows)
-
-def ensure_match_player(user_id: str, match_id: str,
-                         tournament_id: str, status: str = "active"):
-    """
-    Ensure a match_player record exists for this user+match.
-    Called when a player casts their first vote for a match.
-    If record already exists, does nothing.
-    """
-    from data.gcs import _fetch, _push
-    rows = _fetch("match_players")
-    exists = any(r["user_id"] == user_id and r["match_id"] == match_id
-                 for r in rows)
-    if not exists:
-        rows.append({
-            "mp_id"        : _uid(),
-            "match_id"     : match_id,
-            "tournament_id": tournament_id,
-            "user_id"      : user_id,
-            "status"       : status,
-            "joined_at"    : _now(),
-            "quit_at"      : "",
-        })
-        _push("match_players", rows)
-
-def set_match_player_quit(user_id: str, tournament_id: str,
-                           quit_iso: str, from_match_id: str,
-                           all_match_ids_ordered: list[str]):
-    """
-    Mark a player as quit for all matches at or after from_match_id.
-    all_match_ids_ordered: match IDs in chronological order.
-    Creates records if they don't exist (player may not have voted in all matches).
-    """
-    from data.gcs import _fetch, _push
-    rows = _fetch("match_players")
-
-    # Find the index of the quit match
-    try:
-        quit_idx = all_match_ids_ordered.index(from_match_id)
-    except ValueError:
-        return
-
-    quit_match_ids = set(all_match_ids_ordered[quit_idx:])
-    existing_map   = {(r["user_id"], r["match_id"]): r for r in rows}
-
-    for mid in quit_match_ids:
-        key = (user_id, mid)
-        if key in existing_map:
-            existing_map[key]["status"]  = "quit"
-            existing_map[key]["quit_at"] = quit_iso
-        else:
-            rows.append({
-                "mp_id"        : _uid(),
-                "match_id"     : mid,
-                "tournament_id": tournament_id,
-                "user_id"      : user_id,
-                "status"       : "quit",
-                "joined_at"    : _now(),
-                "quit_at"      : quit_iso,
-            })
-    _push("match_players", rows)
-
-def remove_match_player_quit(user_id: str, tournament_id: str,
-                              from_match_id: str,
-                              all_match_ids_ordered: list[str]):
-    """
-    Reinstate a player — set status back to active for all quit matches.
-    Removes records that were created purely for quit tracking (no actual vote).
-    """
-    from data.gcs import _fetch, _push
-    rows = _fetch("match_players")
-    try:
-        quit_idx = all_match_ids_ordered.index(from_match_id)
-    except ValueError:
-        return
-    quit_match_ids = set(all_match_ids_ordered[quit_idx:])
-    # Get match IDs this player actually voted in
-    votes = [v for v in read_table("votes")
-             if v["user_id"] == user_id and v["tournament_id"] == tournament_id]
-    voted_ids = {v["match_id"] for v in votes}
-
-    updated = []
-    for r in rows:
-        if r["user_id"] == user_id and r["match_id"] in quit_match_ids:
-            if r["match_id"] in voted_ids:
-                # Player actually voted — restore to active
-                r["status"]  = "active"
-                r["quit_at"] = ""
-                updated.append(r)
-            # else: record was created only for quit tracking — drop it
-        else:
-            updated.append(r)
-    _push("match_players", updated)
-
-
 # ── Matches ───────────────────────────────────────────────────────────────────
 
 def get_matches(tournament_id: str = None, status: str = None) -> list[dict]:
@@ -376,8 +260,7 @@ def get_user_vote(user_id: str, match_id: str) -> dict | None:
                  if v["user_id"] == user_id and v["match_id"] == match_id), None)
 
 def cast_vote(user_id: str, match_id: str, tid: str, vote: str):
-    ensure_registered(user_id, tid)        # auto-register on first vote
-    ensure_match_player(user_id, match_id, tid)  # record in match_players
+    ensure_registered(user_id, tid)   # auto-register on first vote
     # Build new votes list locally, write async to GCS
     from data.gcs import read_table as _rt, write_table as _wt
     votes = [v for v in _rt("votes")
