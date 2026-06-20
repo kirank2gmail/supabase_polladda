@@ -814,15 +814,13 @@ def _player_quit_tab():
                 aware_utc = aware_ist.astimezone(timezone.utc)
                 quit_iso  = aware_utc.isoformat()
 
-                # Flush ALL caches before writing quit status and recalculating
-                # This guarantees every subsequent read gets fresh data from GCS
+                # Flush ALL caches so every subsequent read is fresh from GCS
                 flush_cache()
 
                 set_player_quit(sel_user["user_id"], sel_tid, quit_iso)
 
-                # Recalculate ALL completed matches in chronological order.
-                # _player_quit_before() inside calculate_match_points determines
-                # which matches give Q vs normal points — no pre-filtering needed.
+                # Recalculate ALL completed matches — _player_quit_before()
+                # inside calculate_match_points handles Q vs normal points.
                 all_completed = sorted(
                     [m for m in all_ms if m["status"] == "completed"],
                     key=lambda x: x["match_date"] + " " + x["start_time"]
@@ -838,9 +836,8 @@ def _player_quit_tab():
                             recalc_count += 1
                     except Exception as e:
                         errors.append(f"{m['match_id']}: {e}")
-
                 if errors:
-                    st.warning(f"⚠️ {len(errors)} error(s): {'; '.join(errors[:3])}")
+                    st.warning(f"⚠️ {len(errors)} error(s): {chr(59).join(errors[:3])}")
                 st.success(
                     f"**{sel_uname}** marked as quit from "
                     f"**{quit_date.strftime('%d %b %Y')} {quit_time.strftime('%I:%M %p')} IST**. "
@@ -878,11 +875,11 @@ def _player_quit_tab():
                           help="Remove quit status and recalculate"):
                 flush_cache()
                 remove_player_quit(q["user_id"], sel_tid)
-                all_completed = sorted(
+                all_completed_r = sorted(
                     [m for m in all_ms if m["status"] == "completed"],
                     key=lambda x: x["match_date"] + " " + x["start_time"]
                 )
-                for m in all_completed:
+                for m in all_completed_r:
                     try:
                         run_points_calculation(m["match_id"], sel_tid, m["result"])
                     except Exception:
