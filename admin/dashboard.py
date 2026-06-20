@@ -815,25 +815,27 @@ def _player_quit_tab():
 
                 set_player_quit(sel_user["user_id"], sel_tid, quit_iso)
 
-                # Find affected matches: compare match start time (converted to UTC)
-                # against quit time (UTC) for accurate cross-timezone comparison
-                from utils.timezone import get_match_cutoff_utc
-                affected = [
-                    m for m in all_ms
-                    if m["status"] == "completed"
-                    and get_match_cutoff_utc(m) >= aware_utc
-                ]
+                # Recalculate ALL completed matches in chronological order.
+                # _player_quit_before() inside calculate_match_points handles
+                # which matches give Q vs normal points — no need to filter here.
+                all_completed = sorted(
+                    [m for m in all_ms if m["status"] == "completed"],
+                    key=lambda x: x["match_date"] + " " + x["start_time"]
+                )
                 recalc_count = 0
-                for m in sorted(affected, key=lambda x: x["match_date"] + " " + x["start_time"]):
+                errors = []
+                for m in all_completed:
                     try:
                         result = run_points_calculation(
                             m["match_id"], sel_tid, m["result"]
                         )
                         if result is not ABANDONED:
                             recalc_count += 1
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        errors.append(f"{m['match_id']}: {e}")
 
+                if errors:
+                    st.warning(f"⚠️ {len(errors)} match(es) had errors: {'; '.join(errors[:3])}")
                 st.success(
                     f"**{sel_uname}** marked as quit from "
                     f"**{quit_date.strftime('%d %b %Y')} {quit_time.strftime('%I:%M %p')} IST**. "
@@ -871,13 +873,11 @@ def _player_quit_tab():
                           help="Remove quit status and recalculate"):
                 remove_player_quit(q["user_id"], sel_tid)
                 # Recalculate all completed matches
-                from utils.timezone import get_match_cutoff_utc
-                affected = [
-                    m for m in all_ms
-                    if m["status"] == "completed"
-                    and get_match_cutoff_utc(m) >= dt_utc
-                ]
-                for m in sorted(affected, key=lambda x: x["match_date"] + " " + x["start_time"]):
+                all_completed = sorted(
+                    [m for m in all_ms if m["status"] == "completed"],
+                    key=lambda x: x["match_date"] + " " + x["start_time"]
+                )
+                for m in all_completed:
                     try:
                         run_points_calculation(m["match_id"], sel_tid, m["result"])
                     except Exception:
