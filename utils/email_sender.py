@@ -290,38 +290,63 @@ def send_poll_results(match: dict, votes: list[dict],
         rows_html += (f'<tr><td colspan="5" style="color:#d97706">'
                       f'<b>Did not vote:</b> {", ".join(no_vote)}</td></tr>')
 
-    # ── Total row for HTML ───────────────────────────────────────────────────
-    grand_total = sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
-    def _cell_num_e(val) -> float:
+    # ── Total row helpers (computed once, used in both PNG + HTML) ──────────
+    def _n(val) -> float:
+        """Extract numeric value from any cell including miss/penalty strings."""
         if val is None or val in ("", "A", "miss"): return 0.0
         if isinstance(val, (int, float)): return float(val)
         if isinstance(val, str):
-            v = val.replace("−", "-").replace("–", "-")
-            try: return float(v)
+            try: return float(val.replace("−", "-").replace("–", "-"))
             except ValueError: return 0.0
         return 0.0
 
-    col_totals_html = {mid: sum(_cell_num_e(r.get(mid)) for r in leaderboard_rows)
-                       for mid in last5_match_ids}
+    grand_total = sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
+    col_totals  = {mid: sum(_n(r.get(mid)) for r in leaderboard_rows)
+                   for mid in last5_match_ids}
     bank        = -grand_total
-    bank_str    = f"+{bank:.2f}" if bank >= 0 else f"{bank:.2f}"
-    bank_color  = "#0e6e24" if bank > 0 else ("#a01414" if bank < 0 else "#555")
+    bank_str    = f"+{bank:.2f}"        if bank >= 0        else f"{bank:.2f}"
     gt_str      = f"+{grand_total:.2f}" if grand_total >= 0 else f"{grand_total:.2f}"
-    gt_color    = "#0e6e24" if grand_total >= 0 else "#a01414"
 
-    _th = "padding:8px 10px;font-size:13px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff"
-    total_row_html  = f"<tr>"
-    total_row_html += f'<td style="{_th};text-align:center">—</td>'
-    total_row_html += f'<td style="{_th}">Total</td>'
-    total_row_html += f'<td style="{_th};text-align:right;color:{gt_color}">{gt_str}</td>'
-    total_row_html += f'<td style="{_th}"></td>'
-    total_row_html += f'<td style="{_th}"></td>'
+    # PNG total row
+    total_cells  = ["—", "Total", gt_str, "", ""]
+    total_styles = [
+        (None, BLACK, "—"),
+        (None, BLACK, "Total"),
+        ((209,240,215) if grand_total>=0 else (252,215,215),
+         (14,110,36)   if grand_total>=0 else (160,20,20), gt_str),
+        (None, BLACK, ""),
+        (None, BLACK, ""),
+    ]
     for mid in last5_match_ids:
-        t = col_totals_html.get(mid, 0.0)
-        c = "#0e6e24" if t > 0 else ("#a01414" if t < 0 else "#555")
+        t = col_totals.get(mid, 0.0)
         v = f"+{t:.2f}" if t > 0 else (f"{t:.2f}" if t < 0 else "0")
-        total_row_html += f'<td style="{_th};text-align:right;color:{c}">{v}</td>'
-    total_row_html += "</tr>"
+        bg = (209,240,215) if t > 0 else ((252,215,215) if t < 0 else None)
+        fg = (14,110,36)   if t > 0 else ((160,20,20)   if t < 0 else BLACK)
+        total_cells.append(v)
+        total_styles.append((bg, fg, v))
+    rows.append(total_cells)
+    styles.append(total_styles)
+
+    title    = f"Leaderboard — {tournament_name}"
+    subtitle = f"After: {match['title']}  ·  Result: {result} Won  ·  🏦 Bank: {bank_str} pts"
+    png = _render_table_png(title, subtitle, headers, rows, styles)
+
+    # HTML total row
+    _th = "padding:8px 10px;font-size:13px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff"
+    _gc = "#0e6e24" if grand_total >= 0 else "#a01414"
+    _bc = "#0e6e24" if bank >= 0 else "#a01414"
+    _html_total_row  = "<tr>"
+    _html_total_row += f'<td style="{_th};text-align:center">—</td>'
+    _html_total_row += f'<td style="{_th}">Total</td>'
+    _html_total_row += f'<td style="{_th};text-align:right;color:{_gc}">{gt_str}</td>'
+    _html_total_row += f'<td style="{_th}"></td>'
+    _html_total_row += f'<td style="{_th}"></td>'
+    for _mid in last5_match_ids:
+        _t = col_totals.get(_mid, 0.0)
+        _c = "#0e6e24" if _t > 0 else ("#a01414" if _t < 0 else "#555")
+        _v = f"+{_t:.2f}" if _t > 0 else (f"{_t:.2f}" if _t < 0 else "0")
+        _html_total_row += f'<td style="{_th};text-align:right;color:{_c}">{_v}</td>'
+    _html_total_row += "</tr>"
 
     html = f"""<!DOCTYPE html><html><body
       style="font-family:Arial,sans-serif;background:#fff;padding:24px;color:#111">
@@ -401,37 +426,6 @@ def send_leaderboard(match: dict, result: str,
         rows.append(row_cells)
         styles.append(row_styles)
 
-    # ── Total row for PNG ────────────────────────────────────────────────────
-    grand_total_png = sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
-    col_totals_png = {mid: sum(_cell_num_e(r.get(mid)) for r in leaderboard_rows)
-                      for mid in last5_match_ids}
-    bank_png     = -grand_total_png
-    bank_str_png = f"+{bank_png:.2f}" if bank_png >= 0 else f"{bank_png:.2f}"
-    gt_str_png   = f"+{grand_total_png:.2f}" if grand_total_png >= 0 else f"{grand_total_png:.2f}"
-
-    total_cells  = ["—", "Total", gt_str_png, "", ""]
-    total_styles = [
-        (None, BLACK, "—"),
-        (None, BLACK, "Total"),
-        ((209,240,215) if grand_total_png>=0 else (252,215,215),
-         (14,110,36)   if grand_total_png>=0 else (160,20,20), gt_str_png),
-        (None, BLACK, ""),
-        (None, BLACK, ""),
-    ]
-    for mid in last5_match_ids:
-        t = col_totals_png.get(mid, 0.0)
-        v = f"+{t:.2f}" if t > 0 else (f"{t:.2f}" if t < 0 else "0")
-        bg = (209,240,215) if t > 0 else ((252,215,215) if t < 0 else None)
-        fg = (14,110,36)   if t > 0 else ((160,20,20)   if t < 0 else BLACK)
-        total_cells.append(v)
-        total_styles.append((bg, fg, v))
-    rows.append(total_cells)
-    styles.append(total_styles)
-
-    title    = f"Leaderboard — {tournament_name}"
-    subtitle = f"After: {match['title']}  ·  Result: {result} Won  ·  🏦 Bank: {bank_str_png} pts"
-    png = _render_table_png(title, subtitle, headers, rows, styles)
-
     # ── HTML body ─────────────────────────────────────────────────────────────
     m_hdrs    = "".join(f"<th>{lbl}</th>" for lbl in m_labels)
     medal_icons = ["🥇","🥈","🥉"]
@@ -482,11 +476,11 @@ def send_leaderboard(match: dict, result: str,
           <th>#</th><th>Player</th><th>Points</th>
           <th>Win%</th><th>Missed</th>{m_hdrs}
         </tr>{rows_html}
-      {total_row_html}
+      {_html_total_row}
       </table>
       <p style="margin-top:8px">
         🏦 <b>Bank:</b>
-        <span style="color:{bank_color};font-weight:700">{bank_str} pts</span>
+        <span style="color:{_bc};font-weight:700">{bank_str} pts</span>
       </p>
       <p style="font-size:12px;color:#aaa;margin-top:4px">
         Last {len(last5_match_ids)} completed matches (latest first).<br>
