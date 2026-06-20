@@ -823,10 +823,16 @@ def _player_quit_tab():
                     if m["status"] == "completed"
                     and get_match_cutoff_utc(m) >= aware_utc
                 ]
+                # Build quit_map directly from the just-applied quit data
+                # Pass it explicitly to avoid stale GCS/session cache
+                fresh_quit_map = {sel_user["user_id"]: quit_iso}
                 recalc_count = 0
                 for m in sorted(affected, key=lambda x: x["match_date"] + " " + x["start_time"]):
                     try:
-                        result = run_points_calculation(m["match_id"], sel_tid, m["result"])
+                        result = run_points_calculation(
+                            m["match_id"], sel_tid, m["result"],
+                            quit_map_override=fresh_quit_map
+                        )
                         if result is not ABANDONED:
                             recalc_count += 1
                     except Exception:
