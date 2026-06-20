@@ -190,23 +190,51 @@ def register_user(user_id: str, tid: str):
 # ── Player quit ───────────────────────────────────────────────────────────────
 
 def set_player_quit(user_id: str, tid: str, quit_at: str):
-    """Mark a player as quit at quit_at (ISO UTC). Auto-registers if needed."""
+    """
+    Mark a player as quit. Reads and writes registrations directly
+    via _fetch/_push to bypass ALL caches — guaranteed fresh data.
+    """
+    from data.gcs import _fetch, _push
+    # Ensure registered first (via normal path)
     ensure_registered(user_id, tid)
-    _update_where("registrations",
-        lambda r: r["user_id"] == user_id and r["tournament_id"] == tid,
-        lambda r: r.update({"quit_at": quit_at}))
+    # Now read fresh from GCS — bypass cache entirely
+    regs = _fetch("registrations")
+    found = False
+    for r in regs:
+        if r["user_id"] == user_id and r["tournament_id"] == tid:
+            r["quit_at"] = quit_at
+            found = True
+    if not found:
+        # Should not happen since ensure_registered was called, but be safe
+        import uuid
+        regs.append({
+            "reg_id": str(uuid.uuid4())[:8],
+            "user_id": user_id,
+            "tournament_id": tid,
+            "registered_at": _now(),
+            "quit_at": quit_at,
+        })
+    # Write directly to GCS AND clear session cache
+    _push("registrations", regs)
+    from data.gcs import _sess_set, _sess_clear
+    _sess_set("registrations", regs)
 
 def remove_player_quit(user_id: str, tid: str):
-    """Remove quit status — player is back in the tournament."""
-    _update_where("registrations",
-        lambda r: r["user_id"] == user_id and r["tournament_id"] == tid,
-        lambda r: r.update({"quit_at": ""}))
+    """Remove quit status — reads/writes directly via GCS bypassing cache."""
+    from data.gcs import _fetch, _push, _sess_set
+    regs = _fetch("registrations")
+    for r in regs:
+        if r["user_id"] == user_id and r["tournament_id"] == tid:
+            r["quit_at"] = ""
+    _push("registrations", regs)
+    _sess_set("registrations", regs)
 
 def get_quit_players(tid: str) -> list[dict]:
-    """Return list of {user_id, quit_at} for players who quit this tournament."""
+    """Return list of {user_id, quit_at} — always reads fresh from GCS."""
+    from data.gcs import _fetch
     return [
         {"user_id": r["user_id"], "quit_at": r.get("quit_at", "")}
-        for r in read_table("registrations")
+        for r in _fetch("registrations")
         if r["tournament_id"] == tid and r.get("quit_at")
     ]
 
