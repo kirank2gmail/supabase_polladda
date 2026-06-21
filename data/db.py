@@ -187,6 +187,87 @@ def register_user(user_id: str, tid: str):
     ensure_registered(user_id, tid)
 
 
+# ── match_players ─────────────────────────────────────────────────────────────
+# match_players.json — one record per (player, match).
+# status: "voted" | "missed" | "quit" | "not_started"
+#   voted       — player cast a vote before cutoff
+#   missed      — player was active but did not vote
+#   quit        — player quit before this match start
+#   not_started — match was before player's first vote (excluded from misses)
+#
+# vote field stores the actual vote string when status="voted", else "".
+# This is the single source of truth for points calculation.
+# All reads/writes bypass the GCS cache (_fetch/_push directly).
+
+def _mp_fetch() -> list[dict]:
+    from data.gcs import _fetch
+    return _fetch("match_players")
+
+def _mp_push(rows: list[dict]):
+    from data.gcs import _push
+    _push("match_players", rows)
+
+def get_match_players(match_id: str = None, tournament_id: str = None,
+                       user_id: str = None) -> list[dict]:
+    """Read match_players fresh from GCS. Filter by any combination of keys."""
+    rows = _mp_fetch()
+    if match_id:      rows = [r for r in rows if r["match_id"] == match_id]
+    if tournament_id: rows = [r for r in rows if r["tournament_id"] == tournament_id]
+    if user_id:       rows = [r for r in rows if r["user_id"] == user_id]
+    return rows
+
+def upsert_match_player(match_id: str, tournament_id: str,
+                         user_id: str, status: str,
+                         vote: str = "", quit_at: str = ""):
+    """
+    Insert or update a match_player record.
+    Uses _fetch/_push to bypass cache entirely.
+    """
+    rows = _mp_fetch()
+    existing = next((r for r in rows
+                     if r["user_id"] == user_id and r["match_id"] == match_id), None)
+    if existing:
+        existing["status"]  = status
+        existing["vote"]    = vote
+        existing["quit_at"] = quit_at
+    else:
+        rows.append({
+            "mp_id"        : _uid(),
+            "match_id"     : match_id,
+            "tournament_id": tournament_id,
+            "user_id"      : user_id,
+            "status"       : status,
+            "vote"         : vote,
+            "quit_at"      : quit_at,
+            "created_at"   : _now(),
+        })
+    _mp_push(rows)
+
+def write_match_players_batch(records: list[dict]):
+    """
+    Write multiple match_player records at once (single GCS write).
+    Upserts by (user_id, match_id). Used by recalculate_tournament and migration.
+    """
+    rows = _mp_fetch()
+    key_map = {(r["user_id"], r["match_id"]): r for r in rows}
+    for rec in records:
+        key = (rec["user_id"], rec["match_id"])
+        if key in key_map:
+            key_map[key].update(rec)
+        else:
+            if "mp_id" not in rec:
+                rec["mp_id"] = _uid()
+            if "created_at" not in rec:
+                rec["created_at"] = _now()
+            key_map[key] = rec
+    _mp_push(list(key_map.values()))
+
+def delete_match_players_for_match(match_id: str):
+    """Remove all match_player records for a match (used when rebuilding)."""
+    rows = [r for r in _mp_fetch() if r["match_id"] != match_id]
+    _mp_push(rows)
+
+
 # ── Matches ───────────────────────────────────────────────────────────────────
 
 def get_matches(tournament_id: str = None, status: str = None) -> list[dict]:
@@ -261,6 +342,8 @@ def get_user_vote(user_id: str, match_id: str) -> dict | None:
 
 def cast_vote(user_id: str, match_id: str, tid: str, vote: str):
     ensure_registered(user_id, tid)   # auto-register on first vote
+    # Write match_player record (voted status) — bypasses cache
+    upsert_match_player(match_id, tid, user_id, status="voted", vote=vote)
     # Build new votes list locally, write async to GCS
     from data.gcs import read_table as _rt, write_table as _wt
     votes = [v for v in _rt("votes")
@@ -273,6 +356,13 @@ def cast_vote(user_id: str, match_id: str, tid: str, vote: str):
     _wt("votes", votes, async_write=True)   # instant local update, async GCS
 
 def update_vote(user_id: str, match_id: str, new_vote: str):
+    # Update match_player record with new vote
+    rows = _mp_fetch()
+    for r in rows:
+        if r["user_id"] == user_id and r["match_id"] == match_id:
+            r["vote"] = new_vote
+            break
+    _mp_push(rows)
     from data.gcs import read_table as _rt, write_table as _wt
     existing  = get_user_vote(user_id, match_id)
     cur_count = int((existing or {}).get("update_count", 0))
