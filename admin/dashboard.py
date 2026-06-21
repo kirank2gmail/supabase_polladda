@@ -484,23 +484,240 @@ def _single_form(tid: str, user: dict):
 
 # ── Results ───────────────────────────────────────────────────────────────────
 
+def _rebuild_match_players(sel_tid: str):
+    """
+    Rebuild match_players.json for a tournament from scratch.
+    Called before recalculating points so match_players is always current.
+
+    For each completed/abandoned match:
+      - voted:       player cast a vote (from votes.json)
+      - missed:      registered player with first vote before this match, no vote
+      - not_started: registered player whose first vote is after this match
+      - abandoned:   match was abandoned — no records written (skipped)
+      - quit:        written separately when admin marks player as quit
+
+    Existing quit records are preserved.
+    """
+    from data.gcs import _fetch, _push
+    from data.db import get_registrations
+
+    # Read everything fresh from GCS
+    all_votes    = _fetch("votes")
+    all_matches  = _fetch("matches")
+    registrations = _fetch("registrations")
+    existing_mp  = _fetch("match_players")
+
+    # Preserve quit records — they are managed separately
+    quit_records = [r for r in existing_mp
+                    if r.get("status") == "quit"
+                    and r.get("tournament_id") == sel_tid]
+    quit_keys    = {(r["user_id"], r["match_id"]) for r in quit_records}
+
+    # Tournament matches sorted chronologically
+    t_matches = sorted(
+        [m for m in all_matches
+         if m.get("tournament_id") == sel_tid
+         and m.get("status") in ("completed", "abandoned")
+         and m.get("result") not in ("", None)],
+        key=lambda m: m["match_date"] + " " + m["start_time"]
+    )
+
+    # Registered players for this tournament
+    reg_users = [r["user_id"] for r in registrations
+                 if r["tournament_id"] == sel_tid]
+
+    # Build vote lookup: {(user_id, match_id): vote_string}
+    vote_map = {}
+    for v in all_votes:
+        if v.get("tournament_id") == sel_tid:
+            vote_map[(v["user_id"], v["match_id"])] = v.get("vote", "")
+
+    # For each registered player, find their first voted match datetime
+    import uuid
+    from datetime import datetime, timezone
+
+    def _uid(): return str(uuid.uuid4())[:8]
+    def _now(): return datetime.now(timezone.utc).isoformat()
+
+    match_dt = {m["match_id"]: f"{m['match_date']} {m['start_time']}"
+                for m in t_matches}
+
+    # Player → first voted match datetime
+    first_vote_dt = {}
+    for uid in reg_users:
+        voted_dts = [match_dt[mid] for mid in match_dt
+                     if (uid, mid) in vote_map]
+        if voted_dts:
+            first_vote_dt[uid] = min(voted_dts)
+
+    # Build new match_player records
+    new_mp = []
+    for m in t_matches:
+        mid  = m["match_id"]
+        mdt  = match_dt[mid]
+        is_abandoned = (m.get("status") == "abandoned"
+                        or m.get("result") == "abandoned")
+
+        if is_abandoned:
+            continue  # no records for abandoned matches
+
+        for uid in reg_users:
+            key = (uid, mid)
+            if key in quit_keys:
+                continue  # preserve quit records separately
+
+            voted = key in vote_map
+            fvdt  = first_vote_dt.get(uid)
+
+            if voted:
+                status = "voted"
+                vote   = vote_map[key]
+            elif fvdt is None or fvdt >= mdt:
+                status = "not_started"  # hadn't joined yet
+                vote   = ""
+            else:
+                status = "missed"
+                vote   = ""
+
+            if status == "not_started":
+                continue  # don't write not_started records — they're just absence
+
+            new_mp.append({
+                "mp_id"        : _uid(),
+                "match_id"     : mid,
+                "tournament_id": sel_tid,
+                "user_id"      : uid,
+                "status"       : status,
+                "vote"         : vote,
+                "quit_at"      : "",
+                "created_at"   : _now(),
+            })
+
+    # Combine with quit records from other tournaments (keep unrelated records)
+    other_mp = [r for r in existing_mp
+                if r.get("tournament_id") != sel_tid]
+    final_mp = other_mp + quit_records + new_mp
+    _push("match_players", final_mp)
+    return len(new_mp)
+
+
+def _rebuild_match_players_for_match(match_id: str, sel_tid: str):
+    """
+    Rebuild match_players records for ONE specific match only.
+    Called when admin saves/updates a single match result.
+    Much faster than rebuilding the whole tournament.
+    """
+    from data.gcs import _fetch, _push
+    import uuid
+    from datetime import datetime, timezone
+
+    def _uid(): return str(uuid.uuid4())[:8]
+    def _now(): return datetime.now(timezone.utc).isoformat()
+
+    # Read everything fresh from GCS
+    all_votes     = _fetch("votes")
+    all_matches   = _fetch("matches")
+    registrations = _fetch("registrations")
+    existing_mp   = _fetch("match_players")
+
+    # Get the specific match
+    this_match = next((m for m in all_matches if m["match_id"] == match_id), None)
+    if not this_match:
+        return
+    this_dt = f"{this_match['match_date']} {this_match['start_time']}"
+
+    # Preserve quit records for this match (managed separately)
+    quit_keys = {(r["user_id"], r["match_id"]) for r in existing_mp
+                 if r.get("status") == "quit"}
+
+    # Registered players for this tournament
+    reg_users = [r["user_id"] for r in registrations
+                 if r["tournament_id"] == sel_tid]
+
+    # Vote map for this match
+    vote_map = {v["user_id"]: v.get("vote", "")
+                for v in all_votes if v.get("match_id") == match_id}
+
+    # All non-abandoned tournament matches (for first-vote-dt calculation)
+    t_matches = [m for m in all_matches
+                 if m.get("tournament_id") == sel_tid
+                 and m.get("status") != "abandoned"
+                 and m.get("result") != "abandoned"]
+
+    match_dt_map = {m["match_id"]: f"{m['match_date']} {m['start_time']}"
+                    for m in t_matches}
+
+    # Per-player: first voted match datetime (across whole tournament)
+    first_vote_dt = {}
+    for uid in reg_users:
+        voted_dts = [match_dt_map[mid]
+                     for v in all_votes
+                     if v.get("user_id") == uid
+                     and v.get("tournament_id") == sel_tid
+                     for mid in [v.get("match_id")]
+                     if mid in match_dt_map]
+        if voted_dts:
+            first_vote_dt[uid] = min(voted_dts)
+
+    # Build records for this match only
+    new_records = []
+    for uid in reg_users:
+        key = (uid, match_id)
+        if key in quit_keys:
+            continue  # quit records managed separately
+
+        voted = uid in vote_map
+        fvdt  = first_vote_dt.get(uid)
+
+        if voted:
+            status = "voted"
+            vote   = vote_map[uid]
+        elif fvdt is None or fvdt >= this_dt:
+            # Player hadn't joined yet — skip (not_started)
+            continue
+        else:
+            status = "missed"
+            vote   = ""
+
+        new_records.append({
+            "mp_id"        : _uid(),
+            "match_id"     : match_id,
+            "tournament_id": sel_tid,
+            "user_id"      : uid,
+            "status"       : status,
+            "vote"         : vote,
+            "quit_at"      : "",
+            "created_at"   : _now(),
+        })
+
+    # Replace only this match's records in match_players
+    other_records = [r for r in existing_mp if r["match_id"] != match_id]
+    _push("match_players", other_records + new_records)
+
+
 def _recalculate_tournament(sel_tid: str):
     """
-    Recalculate points for ALL completed/abandoned matches in a tournament
-    in chronological order. Abandoned matches (no votes) are detected
-    automatically and marked accordingly.
+    Rebuild match_players then recalculate points for all completed matches.
+    match_players is rebuilt fresh from votes.json + registrations.json first,
+    so points calculation reads a complete, accurate table with no cache.
     Returns tuple (recalc_count, abandoned_count, error_count).
     """
-    all_ms = get_matches(sel_tid)
+    # Step 1: rebuild match_players from scratch
+    _rebuild_match_players(sel_tid)
+
+    # Step 2: recalculate points using match_players
+    from data.gcs import _fetch
+    all_ms = _fetch("matches")
     done   = sorted(
-        [m for m in all_ms if m["status"] in ("completed", "abandoned")
+        [m for m in all_ms
+         if m.get("tournament_id") == sel_tid
+         and m["status"] in ("completed", "abandoned")
          and m.get("result") not in ("", None)],
         key=lambda m: m["match_date"] + " " + m["start_time"]
     )
     recalc = abandoned = errors = 0
     for m in done:
         if m.get("status") == "abandoned" and m.get("result") == "abandoned":
-            # Already abandoned — just clear stale points
             from data.db import delete_match_points as _dmp
             _dmp(m["match_id"])
             abandoned += 1
@@ -512,7 +729,7 @@ def _recalculate_tournament(sel_tid: str):
                 abandoned += 1
             else:
                 recalc += 1
-        except Exception:
+        except Exception as e:
             errors += 1
     return recalc, abandoned, errors
 
@@ -577,6 +794,7 @@ def _results_tab():
                     winner = c2.selectbox("Winner", opts, key=f"r_{m['match_id']}")
                     if c3.button("Save Result", key=f"rb_{m['match_id']}", type="primary"):
                         with st.spinner("Calculating points..."):
+                            _rebuild_match_players_for_match(m["match_id"], sel_tid)
                             records = run_points_calculation(m["match_id"], sel_tid, winner)
                         if records is ABANDONED:
                             mark_match_abandoned(m["match_id"])
@@ -652,6 +870,7 @@ def _results_tab():
                     if c3.button("Update Result", key=f"corrb_{m['match_id']}",
                                   type="primary", disabled=not changed):
                         with st.spinner("Recalculating..."):
+                            _rebuild_match_players_for_match(m["match_id"], sel_tid)
                             records = run_points_calculation(
                                 m["match_id"], sel_tid, new_w)
                         if records is ABANDONED:
