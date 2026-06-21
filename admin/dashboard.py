@@ -565,6 +565,24 @@ def _results_tab():
             st.success(msg)
             st.rerun()
 
+    # ── Migrate match_players ─────────────────────────────────────────────────
+    with st.container(border=True):
+        c1, c2 = st.columns([3, 1])
+        c1.markdown("**🗂️ Migrate match_players**")
+        c1.caption(
+            "One-time back-fill: creates match_player records from existing "
+            "votes.json for any entries not yet present. Safe to re-run — "
+            "skips records that already exist. Use when seeding a fresh "
+            "deployment or after importing historical votes."
+        )
+        if c2.button("Run Migration", key="run_migration", use_container_width=True):
+            with st.spinner("Migrating match_players from votes…"):
+                from data.match_players import migrate_from_votes
+                from data.gcs import _fetch, _push
+                n = migrate_from_votes(_fetch, _push)
+            st.success(f"Migration complete — {n} new record(s) created.")
+            st.rerun()
+
     st.markdown("")
 
     # ── 1. Awaiting Result Entry ───────────────────────────────────────────────
