@@ -1,58 +1,40 @@
 """
 migrate_match_players.py
 ━━━━━━━━━━━━━━━━━━━━━━━
-One-time migration script to back-fill match_players.json from existing
-votes.json data.
+CLI and Streamlit runners for rebuilding match_players.json.
 
-All rebuild logic now lives in data/match_players.py.
-This file is a thin runner that calls the shared helpers.
+All logic lives in data/match_players.migrate_from_votes().
+This file is a thin entry-point only.
 
-Two modes
-─────────
-1. migrate_from_votes  — additive back-fill from votes (original migration).
-   Safe to re-run: skips records that already exist.
+Usage (CLI)
+───────────
+Rebuild all tournaments:
+    python migrate_match_players.py
 
-2. rebuild_for_tournament  — full deterministic rebuild for one tournament.
-   Use this when you want a clean, authoritative state (e.g. after adding
-   registrations or correcting votes).
-
-Run from repo root:
-    python migrate_match_players.py                        # migrate mode
-    python migrate_match_players.py --rebuild IPL2026      # rebuild mode
+Rebuild one tournament:
+    python migrate_match_players.py --tournament IPL2026
 """
 
 import sys
 
 
-# ── Streamlit admin runners ───────────────────────────────────────────────────
+# ── Streamlit admin runner ────────────────────────────────────────────────────
 
-def run_migration_in_streamlit() -> int:
+def run_migration_in_streamlit(tournament_id: str | None = None) -> int:
     """
-    Additive back-fill from votes.json.
-    Call from a Streamlit admin button:
+    Full rebuild of match_players for one or all tournaments.
 
+    Produces voted + missed records; preserves quit records.
+    Safe to re-run at any time — always writes a clean, complete table.
+
+    Example usage in dashboard.py:
         from migrate_match_players import run_migration_in_streamlit
-        if st.button("🔄 Migrate match_players"):
-            n = run_migration_in_streamlit()
-            st.success(f"Migration complete — {n} new records created")
+        if st.button("🗂️ Run Migration"):
+            n = run_migration_in_streamlit(sel_tid)
+            st.success(f"Done — {n} record(s) written")
     """
-    from data.gcs import _fetch, _push
     from data.match_players import migrate_from_votes
-    return migrate_from_votes(_fetch, _push)
-
-
-def run_rebuild_in_streamlit(tournament_id: str) -> int:
-    """
-    Full deterministic rebuild for one tournament.
-    Call from a Streamlit admin button:
-
-        from migrate_match_players import run_rebuild_in_streamlit
-        if st.button("🔄 Rebuild match_players"):
-            n = run_rebuild_in_streamlit("IPL2026")
-            st.success(f"Rebuild complete — {n} records written")
-    """
-    from data.match_players import rebuild_for_tournament
-    return rebuild_for_tournament(tournament_id)
+    return migrate_from_votes(tournament_id=tournament_id)
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
@@ -66,18 +48,18 @@ if __name__ == "__main__":
         print("Run from repo root: python migrate_match_players.py")
         sys.exit(1)
 
-    if "--rebuild" in sys.argv:
-        idx = sys.argv.index("--rebuild")
+    from data.match_players import migrate_from_votes
+
+    tid = None
+    if "--tournament" in sys.argv:
+        idx = sys.argv.index("--tournament")
         if idx + 1 >= len(sys.argv):
-            print("Usage: python migrate_match_players.py --rebuild <tournament_id>")
+            print("Usage: python migrate_match_players.py --tournament <tournament_id>")
             sys.exit(1)
         tid = sys.argv[idx + 1]
         print(f"Rebuilding match_players for tournament: {tid}")
-        from data.match_players import rebuild_for_tournament
-        n = rebuild_for_tournament(tid)
-        print(f"Done — {n} records written")
     else:
-        print("Running additive migration from votes.json …")
-        from data.match_players import migrate_from_votes
-        n = migrate_from_votes(_fetch, _push)
-        print(f"Done — {n} new records added")
+        print("Rebuilding match_players for ALL tournaments …")
+
+    n = migrate_from_votes(tournament_id=tid, gcs_fetch_fn=_fetch, gcs_push_fn=_push)
+    print(f"Done — {n} record(s) written")
