@@ -1,96 +1,83 @@
 """
 migrate_match_players.py
 ━━━━━━━━━━━━━━━━━━━━━━━
-One-time migration script to build match_players.json from existing
-votes.json and registrations.json data.
+One-time migration script to back-fill match_players.json from existing
+votes.json data.
 
-Run this ONCE from Streamlit admin or via a standalone script before
-switching points calculation to use match_players.
+All rebuild logic now lives in data/match_players.py.
+This file is a thin runner that calls the shared helpers.
 
-Logic:
-  - For every vote in votes.json, create an "active" match_player record
-  - Players with quit_at in registrations.json are not handled here
-    (quit will be applied via the new admin UI after migration)
-  - Abandoned matches have no voters, so no match_player records
+Two modes
+─────────
+1. migrate_from_votes  — additive back-fill from votes (original migration).
+   Safe to re-run: skips records that already exist.
 
-After running, verify by checking that points recalculation gives same results.
+2. rebuild_for_tournament  — full deterministic rebuild for one tournament.
+   Use this when you want a clean, authoritative state (e.g. after adding
+   registrations or correcting votes).
+
+Run from repo root:
+    python migrate_match_players.py                        # migrate mode
+    python migrate_match_players.py --rebuild IPL2026      # rebuild mode
 """
 
-import json
-import uuid
-from datetime import datetime, timezone
+import sys
 
 
-def _now():
-    return datetime.now(timezone.utc).isoformat()
+# ── Streamlit admin runners ───────────────────────────────────────────────────
 
-
-def _uid():
-    return str(uuid.uuid4())[:8]
-
-
-def migrate(gcs_fetch_fn, gcs_push_fn):
+def run_migration_in_streamlit() -> int:
     """
-    gcs_fetch_fn: callable(table_name) -> list[dict]
-    gcs_push_fn:  callable(table_name, records) -> None
-    """
-    print("Reading votes.json...")
-    votes = gcs_fetch_fn("votes")
-    print(f"  {len(votes)} votes found")
+    Additive back-fill from votes.json.
+    Call from a Streamlit admin button:
 
-    print("Reading match_players.json (existing)...")
-    existing_mp = gcs_fetch_fn("match_players")
-    existing_keys = {(r["user_id"], r["match_id"]) for r in existing_mp}
-    print(f"  {len(existing_mp)} existing records")
-
-    new_records = []
-    for v in votes:
-        key = (v["user_id"], v["match_id"])
-        if key not in existing_keys:
-            new_records.append({
-                "mp_id"        : _uid(),
-                "match_id"     : v["match_id"],
-                "tournament_id": v.get("tournament_id", ""),
-                "user_id"      : v["user_id"],
-                "status"       : "active",
-                "joined_at"    : v.get("voted_at", _now()),
-                "quit_at"      : "",
-            })
-            existing_keys.add(key)
-
-    all_records = existing_mp + new_records
-    print(f"  {len(new_records)} new records to add")
-    print(f"  {len(all_records)} total records")
-
-    print("Writing match_players.json...")
-    gcs_push_fn("match_players", all_records)
-    print("✅ Migration complete")
-    return len(new_records)
-
-
-# ── Streamlit admin runner ────────────────────────────────────────────────────
-
-def run_migration_in_streamlit():
-    """
-    Call this from a Streamlit button in the admin dashboard.
-    Example usage in dashboard.py:
         from migrate_match_players import run_migration_in_streamlit
         if st.button("🔄 Migrate match_players"):
             n = run_migration_in_streamlit()
             st.success(f"Migration complete — {n} new records created")
     """
-    import streamlit as st
     from data.gcs import _fetch, _push
-    return migrate(_fetch, _push)
+    from data.match_players import migrate_from_votes
+    return migrate_from_votes(_fetch, _push)
 
+
+def run_rebuild_in_streamlit(tournament_id: str) -> int:
+    """
+    Full deterministic rebuild for one tournament.
+    Call from a Streamlit admin button:
+
+        from migrate_match_players import run_rebuild_in_streamlit
+        if st.button("🔄 Rebuild match_players"):
+            n = run_rebuild_in_streamlit("IPL2026")
+            st.success(f"Rebuild complete — {n} records written")
+    """
+    from data.match_players import rebuild_for_tournament
+    return rebuild_for_tournament(tournament_id)
+
+
+# ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Run standalone (for local testing)
-    import sys
     sys.path.insert(0, ".")
+
     try:
         from data.gcs import _fetch, _push
-        n = migrate(_fetch, _push)
-        print(f"Added {n} records")
     except ImportError:
         print("Run from repo root: python migrate_match_players.py")
+        sys.exit(1)
+
+    if "--rebuild" in sys.argv:
+        idx = sys.argv.index("--rebuild")
+        if idx + 1 >= len(sys.argv):
+            print("Usage: python migrate_match_players.py --rebuild <tournament_id>")
+            sys.exit(1)
+        tid = sys.argv[idx + 1]
+        print(f"Rebuilding match_players for tournament: {tid}")
+        from data.match_players import rebuild_for_tournament
+        n = rebuild_for_tournament(tid)
+        print(f"Done — {n} records written")
+    else:
+        print("Running additive migration from votes.json …")
+        from data.match_players import migrate_from_votes
+        n = migrate_from_votes(_fetch, _push)
+        print(f"Done — {n} new records added")
