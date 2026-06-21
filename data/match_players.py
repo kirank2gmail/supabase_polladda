@@ -5,28 +5,36 @@ Single source of truth for building / rebuilding match_players.json.
 
 Public API
 ──────────
+migrate_from_votes(tournament_id, gcs_fetch_fn, gcs_push_fn)
+    Full deterministic rebuild of match_players for one or all tournaments.
+    This is THE core logic: voted + missed records, quit records preserved,
+    abandoned matches skipped, not_started players omitted.
+
+    Called by:
+      • Dashboard "Run Migration" button  — to inspect match_players without
+        touching points
+      • rebuild_for_tournament()          — before recalculating points
+      • migrate_match_players.py CLI      — standalone seeding / repair
+
 rebuild_for_match(match_id, tournament_id)
-    Rebuild match_player records for ONE match.
-    Called by the admin dashboard when a single result is saved or corrected.
+    Rebuild match_player records for ONE match only.
+    Called when admin saves or corrects a single match result.
 
 rebuild_for_tournament(tournament_id)
-    Rebuild match_player records for ALL completed/abandoned matches in a
-    tournament.  Called by "Recalculate Tournament" and by the migration
-    script when seeding from scratch.
-
-migrate_from_votes(gcs_fetch_fn, gcs_push_fn)
-    One-time migration helper that back-fills match_players from votes.json
-    without touching existing records.  Kept for the standalone migration
-    script; prefer rebuild_for_tournament for admin-driven rebuilds.
+    Thin wrapper: calls migrate_from_votes then returns the record count.
+    Called by "Recalculate Tournament" (which also recalculates points
+    afterwards).
 
 Design notes
 ────────────
-• All reads bypass the session / TTL caches — raw _fetch/_push so that points
-  calculation always sees a fully consistent, freshly-written table.
-• quit records are always preserved; they are managed separately by the admin.
-• not_started players (first vote is after this match) are silently skipped —
-  they produce no row in match_players.
-• abandoned matches produce no rows at all.
+• All reads bypass the session / TTL caches — raw _fetch/_push so that
+  points calculation always sees a fully consistent, freshly-written table.
+• quit records are always preserved; they are managed separately by admin.
+• not_started players (first vote is after this match) produce no row.
+• abandoned matches produce no rows.
+• migrate_from_votes accepts optional gcs_fetch_fn / gcs_push_fn so the
+  CLI and Streamlit callers can pass in the same _fetch/_push primitives
+  without importing from data.gcs at module level.
 """
 
 from __future__ import annotations
@@ -55,7 +63,7 @@ def _is_abandoned(m: dict) -> bool:
             or m.get("result") == "abandoned")
 
 
-# ── shared core ───────────────────────────────────────────────────────────────
+# ── per-match record builder (shared by both single-match and full rebuild) ───
 
 def _build_records_for_match(
     match_id: str,
@@ -67,18 +75,17 @@ def _build_records_for_match(
     quit_keys: set[tuple],
 ) -> list[dict]:
     """
-    Build the full set of match_player records for a single match.
+    Build voted + missed records for a single match.
 
-    Returns a list of dicts (voted | missed).
-    not_started and quit players produce no record.
-    If the match is abandoned, returns an empty list immediately.
+    Returns [] for abandoned matches.
+    not_started and quit players are silently omitted.
     """
     if _is_abandoned(this_match):
         return []
 
     this_dt = _match_dt(this_match)
 
-    # Build a date-time map for every non-abandoned tournament match
+    # Date-time map for every non-abandoned match in this tournament
     match_dt_map: dict[str, str] = {
         m["match_id"]: _match_dt(m)
         for m in all_matches
@@ -86,11 +93,11 @@ def _build_records_for_match(
         and not _is_abandoned(m)
     }
 
-    # Registered players for this tournament
+    # Players registered for this tournament
     reg_users = [r["user_id"] for r in registrations
                  if r["tournament_id"] == tournament_id]
 
-    # Votes for this specific match  {user_id: vote_string}
+    # Votes cast for this specific match  {user_id: vote_string}
     vote_map: dict[str, str] = {
         v["user_id"]: v.get("vote", "")
         for v in all_votes
@@ -98,7 +105,8 @@ def _build_records_for_match(
         and v.get("tournament_id") == tournament_id
     }
 
-    # First voted match datetime per player (across the whole tournament)
+    # Each player's first voted match datetime across the whole tournament
+    # (used to distinguish "missed" from "not started yet")
     first_vote_dt: dict[str, str] = {}
     for uid in reg_users:
         voted_dts = [
@@ -114,7 +122,7 @@ def _build_records_for_match(
     records: list[dict] = []
     for uid in reg_users:
         if (uid, match_id) in quit_keys:
-            continue  # quit records are preserved separately
+            continue  # preserved separately
 
         voted = uid in vote_map
         fvdt  = first_vote_dt.get(uid)
@@ -123,8 +131,7 @@ def _build_records_for_match(
             status = "voted"
             vote   = vote_map[uid]
         elif fvdt is None or fvdt >= this_dt:
-            # Player hadn't started yet — no record
-            continue
+            continue  # not started yet — no record
         else:
             status = "missed"
             vote   = ""
@@ -145,12 +152,98 @@ def _build_records_for_match(
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def migrate_from_votes(
+    tournament_id: str | None = None,
+    gcs_fetch_fn=None,
+    gcs_push_fn=None,
+) -> int:
+    """
+    Full deterministic rebuild of match_players.json.
+
+    Reads votes.json, registrations.json, and matches.json to produce
+    complete voted + missed records for every completed match.
+    Quit records are preserved. Abandoned matches produce no rows.
+
+    Parameters
+    ──────────
+    tournament_id
+        Scope the rebuild to one tournament.  Pass None to rebuild ALL
+        tournaments (useful for the initial one-time migration).
+    gcs_fetch_fn / gcs_push_fn
+        Injectable GCS primitives.  When None, defaults to data.gcs._fetch
+        and data.gcs._push so Streamlit callers don't need to import them.
+
+    Returns
+    ───────
+    Number of new (voted + missed) records written for the tournament(s).
+    """
+    if gcs_fetch_fn is None or gcs_push_fn is None:
+        from data.gcs import _fetch, _push
+        gcs_fetch_fn = gcs_fetch_fn or _fetch
+        gcs_push_fn  = gcs_push_fn  or _push
+
+    all_votes     = gcs_fetch_fn("votes")
+    all_matches   = gcs_fetch_fn("matches")
+    registrations = gcs_fetch_fn("registrations")
+    existing_mp   = gcs_fetch_fn("match_players")
+
+    # Determine which tournament IDs to rebuild
+    if tournament_id:
+        tids = [tournament_id]
+    else:
+        tids = list({m["tournament_id"] for m in all_matches
+                     if m.get("tournament_id")})
+
+    # Preserve ALL quit records up front (across every tournament)
+    quit_records = [r for r in existing_mp if r.get("status") == "quit"]
+    quit_keys    = {(r["user_id"], r["match_id"]) for r in quit_records}
+
+    # Keep records that belong to tournaments we are NOT rebuilding
+    other_mp = [r for r in existing_mp
+                if r.get("tournament_id") not in tids
+                and r.get("status") != "quit"]
+
+    new_mp: list[dict] = []
+    for tid in tids:
+        # Completed (non-abandoned) matches for this tournament, oldest first
+        t_matches = sorted(
+            [
+                m for m in all_matches
+                if m.get("tournament_id") == tid
+                and m.get("status") in ("completed", "abandoned")
+                and m.get("result") not in ("", None)
+            ],
+            key=_match_dt,
+        )
+        for m in t_matches:
+            new_mp.extend(
+                _build_records_for_match(
+                    m["match_id"], tid,
+                    m, all_matches, all_votes, registrations, quit_keys,
+                )
+            )
+
+    gcs_push_fn("match_players", other_mp + quit_records + new_mp)
+    return len(new_mp)
+
+
+def rebuild_for_tournament(tournament_id: str) -> int:
+    """
+    Thin wrapper: rebuild match_players for one tournament via
+    migrate_from_votes, then return the record count.
+
+    Called by _recalculate_tournament in dashboard.py before points are
+    recalculated, so match_players is always fresh and complete.
+    """
+    return migrate_from_votes(tournament_id=tournament_id)
+
+
 def rebuild_for_match(match_id: str, tournament_id: str) -> int:
     """
     Rebuild match_players records for ONE match only.
 
-    Replaces all existing records for that match_id (except quit records),
-    then writes the updated table back to GCS.
+    Replaces all non-quit records for that match, preserves quit records,
+    leaves all other matches untouched.
 
     Returns the number of new records written.
     """
@@ -167,7 +260,6 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
     if not this_match:
         return 0
 
-    # Quit keys are global across all tournaments
     quit_keys = {
         (r["user_id"], r["match_id"])
         for r in existing_mp
@@ -179,115 +271,11 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
         this_match, all_matches, all_votes, registrations, quit_keys,
     )
 
-    # Keep every record that is NOT for this match
-    other_records = [r for r in existing_mp if r["match_id"] != match_id]
-
-    # Re-add quit records for this match from the existing set
-    quit_this_match = [
-        r for r in existing_mp
-        if r["match_id"] == match_id and r.get("status") == "quit"
-    ]
+    # All records except this match's non-quit rows
+    other_records   = [r for r in existing_mp if r["match_id"] != match_id]
+    quit_this_match = [r for r in existing_mp
+                       if r["match_id"] == match_id
+                       and r.get("status") == "quit"]
 
     _push("match_players", other_records + quit_this_match + new_records)
-    return len(new_records)
-
-
-def rebuild_for_tournament(tournament_id: str) -> int:
-    """
-    Rebuild match_players records for ALL completed / abandoned matches in a
-    tournament from scratch.
-
-    Existing quit records for this tournament are preserved.
-    Records belonging to other tournaments are untouched.
-
-    Returns the total number of active records written (voted + missed).
-    """
-    from data.gcs import _fetch, _push
-
-    all_votes     = _fetch("votes")
-    all_matches   = _fetch("matches")
-    registrations = _fetch("registrations")
-    existing_mp   = _fetch("match_players")
-
-    # Preserve quit records for THIS tournament
-    quit_records = [
-        r for r in existing_mp
-        if r.get("status") == "quit"
-        and r.get("tournament_id") == tournament_id
-    ]
-    quit_keys = {(r["user_id"], r["match_id"]) for r in quit_records}
-
-    # Tournament matches, sorted chronologically, with a result set
-    t_matches = sorted(
-        [
-            m for m in all_matches
-            if m.get("tournament_id") == tournament_id
-            and m.get("status") in ("completed", "abandoned")
-            and m.get("result") not in ("", None)
-        ],
-        key=_match_dt,
-    )
-
-    new_mp: list[dict] = []
-    for m in t_matches:
-        new_mp.extend(
-            _build_records_for_match(
-                m["match_id"], tournament_id,
-                m, all_matches, all_votes, registrations, quit_keys,
-            )
-        )
-
-    # Keep records from OTHER tournaments, then add this tournament's quit +
-    # freshly-built records
-    other_mp = [r for r in existing_mp
-                if r.get("tournament_id") != tournament_id]
-
-    _push("match_players", other_mp + quit_records + new_mp)
-    return len(new_mp)
-
-
-def migrate_from_votes(
-    gcs_fetch_fn,
-    gcs_push_fn,
-) -> int:
-    """
-    One-time migration: back-fill match_players from votes.json without
-    disturbing any existing records.
-
-    gcs_fetch_fn: callable(table_name) -> list[dict]
-    gcs_push_fn:  callable(table_name, records) -> None
-
-    Returns the number of new records added.
-    """
-    print("Reading votes.json …")
-    votes = gcs_fetch_fn("votes")
-    print(f"  {len(votes)} votes found")
-
-    print("Reading match_players.json (existing) …")
-    existing_mp   = gcs_fetch_fn("match_players")
-    existing_keys = {(r["user_id"], r["match_id"]) for r in existing_mp}
-    print(f"  {len(existing_mp)} existing records")
-
-    new_records: list[dict] = []
-    for v in votes:
-        key = (v["user_id"], v["match_id"])
-        if key not in existing_keys:
-            new_records.append({
-                "mp_id"        : _uid(),
-                "match_id"     : v["match_id"],
-                "tournament_id": v.get("tournament_id", ""),
-                "user_id"      : v["user_id"],
-                "status"       : "active",      # migration sentinel
-                "vote"         : v.get("vote", ""),
-                "quit_at"      : "",
-                "created_at"   : v.get("voted_at", _now()),
-            })
-            existing_keys.add(key)
-
-    print(f"  {len(new_records)} new records to add")
-    print(f"  {len(existing_mp) + len(new_records)} total records")
-
-    print("Writing match_players.json …")
-    gcs_push_fn("match_players", existing_mp + new_records)
-    print("✅ Migration complete")
     return len(new_records)
