@@ -568,19 +568,18 @@ def _results_tab():
     # ── Migrate match_players ─────────────────────────────────────────────────
     with st.container(border=True):
         c1, c2 = st.columns([3, 1])
-        c1.markdown("**🗂️ Migrate match_players**")
+        c1.markdown("**🗂️ Rebuild match_players**")
         c1.caption(
-            "One-time back-fill: creates match_player records from existing "
-            "votes.json for any entries not yet present. Safe to re-run — "
-            "skips records that already exist. Use when seeding a fresh "
-            "deployment or after importing historical votes."
+            "Rebuilds match_players.json for this tournament from scratch: "
+            "voted + missed records, quit records preserved, abandoned matches "
+            "skipped. Safe to re-run at any time. Use this to inspect or "
+            "repair match_players without recalculating points."
         )
-        if c2.button("Run Migration", key="run_migration", use_container_width=True):
-            with st.spinner("Migrating match_players from votes…"):
+        if c2.button("Rebuild match_players", key="run_migration", use_container_width=True):
+            with st.spinner("Rebuilding match_players…"):
                 from data.match_players import migrate_from_votes
-                from data.gcs import _fetch, _push
-                n = migrate_from_votes(_fetch, _push)
-            st.success(f"Migration complete — {n} new record(s) created.")
+                n = migrate_from_votes(tournament_id=sel_tid)
+            st.success(f"Done — {n} record(s) written for {sel_n}.")
             st.rerun()
 
     st.markdown("")
