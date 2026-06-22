@@ -279,3 +279,131 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
 
     _push("match_players", other_records + quit_this_match + new_records)
     return len(new_records)
+
+
+def quit_player(user_id: str, tournament_id: str, quit_date: str) -> int:
+    """
+    Mark a player as quit from quit_date onwards for a tournament.
+
+    For every match_players record belonging to this player in this
+    tournament where match_date >= quit_date:
+      - status  → "quit"
+      - quit_at → quit_date
+
+    Records before quit_date are left untouched.
+    Any future rebuild_for_tournament / rebuild_for_match call will
+    preserve these quit records (they are in quit_keys).
+
+    Returns the number of records updated.
+    """
+    from data.gcs import _fetch, _push
+
+    all_mp      = _fetch("match_players")
+    all_matches = _fetch("matches")
+
+    # Build match_id → match_date lookup for this tournament
+    match_date_map = {
+        m["match_id"]: m["match_date"]
+        for m in all_matches
+        if m.get("tournament_id") == tournament_id
+    }
+
+    updated = 0
+    for r in all_mp:
+        if r.get("user_id") != user_id:
+            continue
+        if r.get("tournament_id") != tournament_id:
+            continue
+        mdate = match_date_map.get(r["match_id"], "")
+        if mdate >= quit_date:
+            r["status"]  = "quit"
+            r["quit_at"] = quit_date
+            updated += 1
+
+    _push("match_players", all_mp)
+    return updated
+
+
+def reinstate_player(user_id: str, tournament_id: str, rejoin_date: str) -> int:
+    """
+    Reinstate a player from rejoin_date onwards for a tournament.
+
+    Deletes all quit records for this player in this tournament where
+    match_date >= rejoin_date, then calls rebuild_for_tournament so
+    those matches are rebuilt as voted / missed correctly from
+    votes.json and registrations.json.
+
+    Records before rejoin_date remain as-is (including any earlier
+    quit period).
+
+    Returns the number of quit records removed before the rebuild.
+    """
+    from data.gcs import _fetch, _push
+
+    all_mp      = _fetch("match_players")
+    all_matches = _fetch("matches")
+
+    match_date_map = {
+        m["match_id"]: m["match_date"]
+        for m in all_matches
+        if m.get("tournament_id") == tournament_id
+    }
+
+    # Remove quit records on/after rejoin_date for this player
+    def _keep(r: dict) -> bool:
+        if r.get("user_id") != user_id:
+            return True
+        if r.get("tournament_id") != tournament_id:
+            return True
+        if r.get("status") != "quit":
+            return True
+        mdate = match_date_map.get(r["match_id"], "")
+        return mdate < rejoin_date   # keep quit records BEFORE rejoin
+
+    removed = sum(1 for r in all_mp if not _keep(r))
+    _push("match_players", [r for r in all_mp if _keep(r)])
+
+    # Rebuild so matches from rejoin_date onwards are voted/missed correctly
+    migrate_from_votes(tournament_id=tournament_id)
+    return removed
+
+
+def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
+    """
+    Return quit status for every player who has any match_players record
+    in this tournament.
+
+    Returns dict keyed by user_id:
+      {
+        "has_quit_records": bool,
+        "quit_since":       earliest quit_at date among quit records (str | None),
+        "active_matches":   count of voted/missed records,
+        "quit_matches":     count of quit records,
+      }
+    """
+    from data.gcs import _fetch
+
+    all_mp = _fetch("match_players")
+    t_mp   = [r for r in all_mp if r.get("tournament_id") == tournament_id]
+
+    status: dict[str, dict] = {}
+    for r in t_mp:
+        uid  = r["user_id"]
+        if uid not in status:
+            status[uid] = {
+                "has_quit_records": False,
+                "quit_since"      : None,
+                "active_matches"  : 0,
+                "quit_matches"    : 0,
+            }
+        s = status[uid]
+        if r.get("status") == "quit":
+            s["has_quit_records"] = True
+            s["quit_matches"]    += 1
+            qa = r.get("quit_at", "")
+            if qa and (s["quit_since"] is None or qa < s["quit_since"]):
+                s["quit_since"] = qa
+        else:
+            s["active_matches"] += 1
+
+    return status
