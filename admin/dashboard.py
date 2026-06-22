@@ -21,6 +21,7 @@ from data.db    import mark_match_abandoned
 from data.match_players import (
     rebuild_for_match, rebuild_for_tournament,
     quit_player, reinstate_player, get_player_quit_status,
+    _match_ist_label,
 )
 from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
@@ -703,8 +704,8 @@ def _results_tab():
 def _quit_tab():
     st.subheader("🚪 Player Quit / Reinstate")
     st.caption(
-        "Mark a player as quit from a specific date, or reinstate them from "
-        "a specific date. match_players.json is updated immediately — "
+        "Mark a player as quit from a specific match, or reinstate them from "
+        "a specific match. match_players.json is updated immediately — "
         "run **Recalculate Tournament** in the Results tab afterwards to "
         "apply the change to points."
     )
@@ -726,19 +727,30 @@ def _quit_tab():
         st.info("No matches in this tournament yet.")
         return
 
-    # Fetch quit status for all players in this tournament
     player_status = get_player_quit_status(sel_tid)
 
     if not player_status:
         st.info("No match_players records yet. Run 'Rebuild match_players' in Results first.")
         return
 
+    # Matches sorted chronologically — used for dropdowns
+    import pytz
+    from datetime import datetime as _dt
+
+    def _sort_key(m):
+        local_tz = pytz.timezone(m.get("timezone", "Asia/Kolkata"))
+        local_dt = _dt.strptime(f"{m['match_date']} {m['start_time']}", "%Y-%m-%d %H:%M")
+        return local_tz.localize(local_dt)
+
+    sorted_ms   = sorted(all_ms, key=_sort_key)
+    match_ids   = [m["match_id"]         for m in sorted_ms]
+    match_labels = [_match_ist_label(m)  for m in sorted_ms]
+
     # ── Player status table ───────────────────────────────────────────────────
     st.markdown("#### Current Player Status")
 
     umap = {u["user_id"]: get_display_name(u["user_id"]) for u in all_users}
 
-    # Sort: quit players first, then alphabetical by name
     sorted_uids = sorted(
         player_status.keys(),
         key=lambda uid: (
@@ -747,20 +759,20 @@ def _quit_tab():
         )
     )
 
-    header_cols = st.columns([3, 2, 2, 2])
+    header_cols = st.columns([3, 4, 1, 1])
     header_cols[0].markdown("**Player**")
     header_cols[1].markdown("**Status**")
-    header_cols[2].markdown("**Active matches**")
-    header_cols[3].markdown("**Quit matches**")
+    header_cols[2].markdown("**Active**")
+    header_cols[3].markdown("**Quit**")
     st.divider()
 
     for uid in sorted_uids:
         s    = player_status[uid]
         name = umap.get(uid, uid)
-        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+        c1, c2, c3, c4 = st.columns([3, 4, 1, 1])
         c1.markdown(f"**{name}**")
         if s["has_quit_records"]:
-            c2.markdown(f"🔴 Quit since `{s['quit_since']}`")
+            c2.markdown(f"🔴 Quit from: `{s['quit_since_label']}`")
         else:
             c2.markdown("🟢 Active")
         c3.markdown(str(s["active_matches"]))
@@ -772,48 +784,45 @@ def _quit_tab():
     # ── Quit action ───────────────────────────────────────────────────────────
     st.markdown("#### Mark Player as Quit")
     st.caption(
-        "Sets all match_players records from the chosen date onwards to "
-        "**quit** status. Records before the date are unchanged."
+        "Sets all match_players records from the selected match onwards "
+        "(inclusive, by IST start time) to **quit** status. "
+        "Records for earlier matches are unchanged."
     )
 
-    # Only show active players (those with at least some active records)
-    active_uids = [uid for uid in sorted_uids
-                   if player_status[uid]["active_matches"] > 0]
+    active_uids  = [uid for uid in sorted_uids
+                    if player_status[uid]["active_matches"] > 0]
     active_names = [umap.get(uid, uid) for uid in active_uids]
 
     if not active_uids:
         st.caption("No active players to quit.")
     else:
         with st.container(border=True):
-            qc1, qc2, qc3 = st.columns([3, 2, 2])
+            qc1, qc2, qc3 = st.columns([2, 4, 2])
             quit_name = qc1.selectbox(
                 "Player", active_names, key="quit_player_sel"
             )
-            quit_uid  = active_uids[active_names.index(quit_name)]
+            quit_uid = active_uids[active_names.index(quit_name)]
 
-            # Default date: date of first upcoming / latest completed match
-            match_dates = sorted(m["match_date"] for m in all_ms)
-            default_quit = date.fromisoformat(match_dates[-1]) if match_dates else date.today()
-
-            quit_date = qc2.date_input(
-                "Quit from date", value=default_quit, key="quit_date_inp"
+            quit_label = qc2.selectbox(
+                "Quit from match (IST)", match_labels,
+                index=len(match_labels) - 1,   # default: last match
+                key="quit_match_sel"
             )
+            quit_match_id = match_ids[match_labels.index(quit_label)]
 
             if qc3.button("Mark as Quit", type="primary",
                           key="quit_btn", use_container_width=True):
-                quit_date_str = quit_date.isoformat()
-                # Check player has records on/after this date
                 with st.spinner("Updating match_players…"):
-                    n = quit_player(quit_uid, sel_tid, quit_date_str)
+                    n = quit_player(quit_uid, sel_tid, quit_match_id)
                 if n == 0:
                     st.warning(
                         f"No match_players records found for **{quit_name}** "
-                        f"on or after {quit_date_str}."
+                        f"at or after the selected match."
                     )
                 else:
                     st.success(
-                        f"**{quit_name}** marked as quit from {quit_date_str} "
-                        f"— {n} record(s) updated. "
+                        f"**{quit_name}** marked as quit from "
+                        f"_{quit_label}_ — {n} record(s) updated. "
                         f"Run **Recalculate Tournament** to apply to points."
                     )
                     st.rerun()
@@ -823,9 +832,9 @@ def _quit_tab():
     # ── Reinstate action ──────────────────────────────────────────────────────
     st.markdown("#### Reinstate Player")
     st.caption(
-        "Removes quit records from the chosen date onwards and rebuilds "
-        "match_players for the tournament so those matches become "
-        "**voted / missed** again. Records before the date are unchanged."
+        "Removes quit records from the selected match onwards and rebuilds "
+        "match_players so those matches become **voted / missed** again. "
+        "Earlier quit records are preserved."
     )
 
     quit_uids  = [uid for uid in sorted_uids
@@ -836,30 +845,32 @@ def _quit_tab():
         st.caption("No quit players to reinstate.")
     else:
         with st.container(border=True):
-            rc1, rc2, rc3 = st.columns([3, 2, 2])
+            rc1, rc2, rc3 = st.columns([2, 4, 2])
             reinstate_name = rc1.selectbox(
                 "Player", quit_names, key="reinstate_player_sel"
             )
             reinstate_uid = quit_uids[quit_names.index(reinstate_name)]
 
-            # Default: their earliest quit date
-            default_rejoin = date.fromisoformat(
-                player_status[reinstate_uid]["quit_since"]
-            )
+            # Pre-select the match they quit from
+            default_mid   = player_status[reinstate_uid]["quit_from_match_id"]
+            default_idx   = (match_ids.index(default_mid)
+                             if default_mid in match_ids else 0)
 
-            rejoin_date = rc2.date_input(
-                "Rejoin from date", value=default_rejoin,
-                key="reinstate_date_inp"
+            rejoin_label = rc2.selectbox(
+                "Rejoin from match (IST)", match_labels,
+                index=default_idx,
+                key="reinstate_match_sel"
             )
+            rejoin_match_id = match_ids[match_labels.index(rejoin_label)]
 
             if rc3.button("Reinstate", type="primary",
                           key="reinstate_btn", use_container_width=True):
-                rejoin_date_str = rejoin_date.isoformat()
                 with st.spinner("Reinstating player and rebuilding match_players…"):
-                    n = reinstate_player(reinstate_uid, sel_tid, rejoin_date_str)
+                    n = reinstate_player(reinstate_uid, sel_tid, rejoin_match_id)
                 st.success(
-                    f"**{reinstate_name}** reinstated from {rejoin_date_str} "
-                    f"— {n} quit record(s) removed, match_players rebuilt. "
+                    f"**{reinstate_name}** reinstated from "
+                    f"_{rejoin_label}_ — {n} quit record(s) removed, "
+                    f"match_players rebuilt. "
                     f"Run **Recalculate Tournament** to apply to points."
                 )
                 st.rerun()
