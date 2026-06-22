@@ -281,18 +281,32 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
     return len(new_records)
 
 
-def quit_player(user_id: str, tournament_id: str, quit_date: str) -> int:
+def _match_ist_label(m: dict) -> str:
     """
-    Mark a player as quit from quit_date onwards for a tournament.
+    Human-readable IST label for a match dropdown:
+    'M5 · CSK vs MI · 15 Apr 2025 07:30 PM IST'
+    """
+    import pytz
+    from datetime import datetime as _dt
+    local_tz = pytz.timezone(m.get("timezone", "Asia/Kolkata"))
+    local_dt = _dt.strptime(
+        f"{m['match_date']} {m['start_time']}", "%Y-%m-%d %H:%M"
+    )
+    ist_dt = local_tz.localize(local_dt).astimezone(pytz.timezone("Asia/Kolkata"))
+    return f"{m['match_id']} · {m['title']} · {ist_dt.strftime('%d %b %Y %I:%M %p IST')}"
 
-    For every match_players record belonging to this player in this
-    tournament where match_date >= quit_date:
-      - status  → "quit"
-      - quit_at → quit_date
 
-    Records before quit_date are left untouched.
-    Any future rebuild_for_tournament / rebuild_for_match call will
-    preserve these quit records (they are in quit_keys).
+def quit_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
+    """
+    Mark a player as quit from from_match_id onwards (inclusive).
+
+    Determines which match_ids come on or after from_match_id by sorting
+    the tournament's matches chronologically and taking the tail from
+    from_match_id.  No datetime arithmetic needed — match_id membership
+    in that set is sufficient.
+
+    quit_at stores the from_match_id so reinstate and status display
+    can look up the label without re-sorting.
 
     Returns the number of records updated.
     """
@@ -301,12 +315,18 @@ def quit_player(user_id: str, tournament_id: str, quit_date: str) -> int:
     all_mp      = _fetch("match_players")
     all_matches = _fetch("matches")
 
-    # Build match_id → match_date lookup for this tournament
-    match_date_map = {
-        m["match_id"]: m["match_date"]
-        for m in all_matches
-        if m.get("tournament_id") == tournament_id
-    }
+    # Sort this tournament's matches chronologically → get IDs from from_match_id onwards
+    t_matches = sorted(
+        [m for m in all_matches if m.get("tournament_id") == tournament_id],
+        key=_match_dt,
+    )
+    match_ids = [m["match_id"] for m in t_matches]
+
+    if from_match_id not in match_ids:
+        return 0
+
+    from_idx     = match_ids.index(from_match_id)
+    quit_match_ids = set(match_ids[from_idx:])
 
     updated = 0
     for r in all_mp:
@@ -314,27 +334,25 @@ def quit_player(user_id: str, tournament_id: str, quit_date: str) -> int:
             continue
         if r.get("tournament_id") != tournament_id:
             continue
-        mdate = match_date_map.get(r["match_id"], "")
-        if mdate >= quit_date:
+        if r["match_id"] in quit_match_ids:
             r["status"]  = "quit"
-            r["quit_at"] = quit_date
+            r["quit_at"] = from_match_id
             updated += 1
 
     _push("match_players", all_mp)
     return updated
 
 
-def reinstate_player(user_id: str, tournament_id: str, rejoin_date: str) -> int:
+def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
     """
-    Reinstate a player from rejoin_date onwards for a tournament.
+    Reinstate a player from from_match_id onwards (inclusive).
 
-    Deletes all quit records for this player in this tournament where
-    match_date >= rejoin_date, then calls rebuild_for_tournament so
-    those matches are rebuilt as voted / missed correctly from
-    votes.json and registrations.json.
+    Removes quit records whose match_id falls on or after from_match_id
+    in chronological order, then calls migrate_from_votes to rebuild
+    those matches as voted / missed from votes.json and registrations.json.
 
-    Records before rejoin_date remain as-is (including any earlier
-    quit period).
+    Quit records for matches before from_match_id are preserved
+    (supports partial quit history: quit, rejoin, quit again).
 
     Returns the number of quit records removed before the rebuild.
     """
@@ -343,13 +361,18 @@ def reinstate_player(user_id: str, tournament_id: str, rejoin_date: str) -> int:
     all_mp      = _fetch("match_players")
     all_matches = _fetch("matches")
 
-    match_date_map = {
-        m["match_id"]: m["match_date"]
-        for m in all_matches
-        if m.get("tournament_id") == tournament_id
-    }
+    t_matches = sorted(
+        [m for m in all_matches if m.get("tournament_id") == tournament_id],
+        key=_match_dt,
+    )
+    match_ids = [m["match_id"] for m in t_matches]
 
-    # Remove quit records on/after rejoin_date for this player
+    if from_match_id not in match_ids:
+        return 0
+
+    from_idx          = match_ids.index(from_match_id)
+    reinstate_match_ids = set(match_ids[from_idx:])
+
     def _keep(r: dict) -> bool:
         if r.get("user_id") != user_id:
             return True
@@ -357,13 +380,11 @@ def reinstate_player(user_id: str, tournament_id: str, rejoin_date: str) -> int:
             return True
         if r.get("status") != "quit":
             return True
-        mdate = match_date_map.get(r["match_id"], "")
-        return mdate < rejoin_date   # keep quit records BEFORE rejoin
+        return r["match_id"] not in reinstate_match_ids
 
     removed = sum(1 for r in all_mp if not _keep(r))
     _push("match_players", [r for r in all_mp if _keep(r)])
 
-    # Rebuild so matches from rejoin_date onwards are voted/missed correctly
     migrate_from_votes(tournament_id=tournament_id)
     return removed
 
@@ -375,34 +396,59 @@ def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
 
     Returns dict keyed by user_id:
       {
-        "has_quit_records": bool,
-        "quit_since":       earliest quit_at date among quit records (str | None),
-        "active_matches":   count of voted/missed records,
-        "quit_matches":     count of quit records,
+        "has_quit_records"  : bool,
+        "quit_from_match_id": match_id stored in quit_at of the earliest
+                              quit record (str | None),
+        "quit_since_label"  : IST label string for that match (str | None),
+        "active_matches"    : count of voted/missed records,
+        "quit_matches"      : count of quit records,
       }
+
+    quit_at on each record holds the from_match_id passed to quit_player,
+    so finding the earliest quit boundary is a simple string comparison
+    using the chronological sort key (_match_dt).
     """
     from data.gcs import _fetch
 
-    all_mp = _fetch("match_players")
-    t_mp   = [r for r in all_mp if r.get("tournament_id") == tournament_id]
+    all_mp      = _fetch("match_players")
+    all_matches = _fetch("matches")
+    t_mp        = [r for r in all_mp if r.get("tournament_id") == tournament_id]
+
+    # match_id → match dict (for label generation and sort key)
+    match_map = {
+        m["match_id"]: m
+        for m in all_matches
+        if m.get("tournament_id") == tournament_id
+    }
+
+    # Chronological sort key per match_id (reuses existing _match_dt helper)
+    def _sort_key(mid: str) -> str:
+        m = match_map.get(mid)
+        return _match_dt(m) if m else ""
 
     status: dict[str, dict] = {}
     for r in t_mp:
-        uid  = r["user_id"]
+        uid = r["user_id"]
         if uid not in status:
             status[uid] = {
-                "has_quit_records": False,
-                "quit_since"      : None,
-                "active_matches"  : 0,
-                "quit_matches"    : 0,
+                "has_quit_records"  : False,
+                "quit_from_match_id": None,
+                "quit_since_label"  : None,
+                "active_matches"    : 0,
+                "quit_matches"      : 0,
             }
         s = status[uid]
         if r.get("status") == "quit":
             s["has_quit_records"] = True
             s["quit_matches"]    += 1
-            qa = r.get("quit_at", "")
-            if qa and (s["quit_since"] is None or qa < s["quit_since"]):
-                s["quit_since"] = qa
+            # quit_at holds the from_match_id used when quitting
+            boundary_mid = r.get("quit_at") or r["match_id"]
+            cur_boundary = s["quit_from_match_id"]
+            if (cur_boundary is None
+                    or _sort_key(boundary_mid) < _sort_key(cur_boundary)):
+                s["quit_from_match_id"] = boundary_mid
+                m = match_map.get(boundary_mid)
+                s["quit_since_label"] = _match_ist_label(m) if m else boundary_mid
         else:
             s["active_matches"] += 1
 
