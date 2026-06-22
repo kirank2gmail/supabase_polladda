@@ -18,7 +18,10 @@ from data.db import (
 )
 from data.points import run_points_calculation, ABANDONED
 from data.db    import mark_match_abandoned
-from data.match_players import rebuild_for_match, rebuild_for_tournament
+from data.match_players import (
+    rebuild_for_match, rebuild_for_tournament,
+    quit_player, reinstate_player, get_player_quit_status,
+)
 from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
 )
@@ -73,13 +76,14 @@ def _validate_options(s: str) -> tuple[bool, str]:
 def show_admin(user: dict):
     st.title("⚙️ Admin Panel")
     st.caption(f"Logged in as **{get_display_name(user['user_id'])}**")
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "👥 Users", "🏆 Tournaments", "📋 Matches", "🎯 Results"
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "👥 Users", "🏆 Tournaments", "📋 Matches", "🎯 Results", "🚪 Player Quit"
     ])
     with tab1: _users_tab(user)
     with tab2: _tournaments_tab(user)
     with tab3: _matches_tab(user)
     with tab4: _results_tab()
+    with tab5: _quit_tab()
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -692,6 +696,174 @@ def _results_tab():
                             if email_configured():
                                 _send_result_emails(m, new_w, sel_tid, records)
                         st.rerun()
+
+
+# ── Player Quit / Reinstate ───────────────────────────────────────────────────
+
+def _quit_tab():
+    st.subheader("🚪 Player Quit / Reinstate")
+    st.caption(
+        "Mark a player as quit from a specific date, or reinstate them from "
+        "a specific date. match_players.json is updated immediately — "
+        "run **Recalculate Tournament** in the Results tab afterwards to "
+        "apply the change to points."
+    )
+
+    ts = get_tournaments()
+    if not ts:
+        st.warning("No tournaments found.")
+        return
+
+    t_names = [t["name"] for t in ts]
+    t_ids   = [t["tournament_id"] for t in ts]
+    sel_n   = st.selectbox("Tournament", t_names, key="quit_t_sel")
+    sel_tid = t_ids[t_names.index(sel_n)]
+
+    all_ms    = get_matches(sel_tid)
+    all_users = get_all_users()
+
+    if not all_ms:
+        st.info("No matches in this tournament yet.")
+        return
+
+    # Fetch quit status for all players in this tournament
+    player_status = get_player_quit_status(sel_tid)
+
+    if not player_status:
+        st.info("No match_players records yet. Run 'Rebuild match_players' in Results first.")
+        return
+
+    # ── Player status table ───────────────────────────────────────────────────
+    st.markdown("#### Current Player Status")
+
+    umap = {u["user_id"]: get_display_name(u["user_id"]) for u in all_users}
+
+    # Sort: quit players first, then alphabetical by name
+    sorted_uids = sorted(
+        player_status.keys(),
+        key=lambda uid: (
+            0 if player_status[uid]["has_quit_records"] else 1,
+            umap.get(uid, uid)
+        )
+    )
+
+    header_cols = st.columns([3, 2, 2, 2])
+    header_cols[0].markdown("**Player**")
+    header_cols[1].markdown("**Status**")
+    header_cols[2].markdown("**Active matches**")
+    header_cols[3].markdown("**Quit matches**")
+    st.divider()
+
+    for uid in sorted_uids:
+        s    = player_status[uid]
+        name = umap.get(uid, uid)
+        c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
+        c1.markdown(f"**{name}**")
+        if s["has_quit_records"]:
+            c2.markdown(f"🔴 Quit since `{s['quit_since']}`")
+        else:
+            c2.markdown("🟢 Active")
+        c3.markdown(str(s["active_matches"]))
+        c4.markdown(str(s["quit_matches"]))
+
+    st.markdown("")
+    st.markdown("---")
+
+    # ── Quit action ───────────────────────────────────────────────────────────
+    st.markdown("#### Mark Player as Quit")
+    st.caption(
+        "Sets all match_players records from the chosen date onwards to "
+        "**quit** status. Records before the date are unchanged."
+    )
+
+    # Only show active players (those with at least some active records)
+    active_uids = [uid for uid in sorted_uids
+                   if player_status[uid]["active_matches"] > 0]
+    active_names = [umap.get(uid, uid) for uid in active_uids]
+
+    if not active_uids:
+        st.caption("No active players to quit.")
+    else:
+        with st.container(border=True):
+            qc1, qc2, qc3 = st.columns([3, 2, 2])
+            quit_name = qc1.selectbox(
+                "Player", active_names, key="quit_player_sel"
+            )
+            quit_uid  = active_uids[active_names.index(quit_name)]
+
+            # Default date: date of first upcoming / latest completed match
+            match_dates = sorted(m["match_date"] for m in all_ms)
+            default_quit = date.fromisoformat(match_dates[-1]) if match_dates else date.today()
+
+            quit_date = qc2.date_input(
+                "Quit from date", value=default_quit, key="quit_date_inp"
+            )
+
+            if qc3.button("Mark as Quit", type="primary",
+                          key="quit_btn", use_container_width=True):
+                quit_date_str = quit_date.isoformat()
+                # Check player has records on/after this date
+                with st.spinner("Updating match_players…"):
+                    n = quit_player(quit_uid, sel_tid, quit_date_str)
+                if n == 0:
+                    st.warning(
+                        f"No match_players records found for **{quit_name}** "
+                        f"on or after {quit_date_str}."
+                    )
+                else:
+                    st.success(
+                        f"**{quit_name}** marked as quit from {quit_date_str} "
+                        f"— {n} record(s) updated. "
+                        f"Run **Recalculate Tournament** to apply to points."
+                    )
+                    st.rerun()
+
+    st.markdown("")
+
+    # ── Reinstate action ──────────────────────────────────────────────────────
+    st.markdown("#### Reinstate Player")
+    st.caption(
+        "Removes quit records from the chosen date onwards and rebuilds "
+        "match_players for the tournament so those matches become "
+        "**voted / missed** again. Records before the date are unchanged."
+    )
+
+    quit_uids  = [uid for uid in sorted_uids
+                  if player_status[uid]["has_quit_records"]]
+    quit_names = [umap.get(uid, uid) for uid in quit_uids]
+
+    if not quit_uids:
+        st.caption("No quit players to reinstate.")
+    else:
+        with st.container(border=True):
+            rc1, rc2, rc3 = st.columns([3, 2, 2])
+            reinstate_name = rc1.selectbox(
+                "Player", quit_names, key="reinstate_player_sel"
+            )
+            reinstate_uid = quit_uids[quit_names.index(reinstate_name)]
+
+            # Default: their earliest quit date
+            default_rejoin = date.fromisoformat(
+                player_status[reinstate_uid]["quit_since"]
+            )
+
+            rejoin_date = rc2.date_input(
+                "Rejoin from date", value=default_rejoin,
+                key="reinstate_date_inp"
+            )
+
+            if rc3.button("Reinstate", type="primary",
+                          key="reinstate_btn", use_container_width=True):
+                rejoin_date_str = rejoin_date.isoformat()
+                with st.spinner("Reinstating player and rebuilding match_players…"):
+                    n = reinstate_player(reinstate_uid, sel_tid, rejoin_date_str)
+                st.success(
+                    f"**{reinstate_name}** reinstated from {rejoin_date_str} "
+                    f"— {n} quit record(s) removed, match_players rebuilt. "
+                    f"Run **Recalculate Tournament** to apply to points."
+                )
+                st.rerun()
+
 
 # ── Email helper ──────────────────────────────────────────────────────────────
 
