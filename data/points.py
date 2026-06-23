@@ -96,15 +96,37 @@ def _count_prior_misses(user_id: str, match_id: str,
         for m in all_matches
     }
 
-    # Count player's "missed" records that are strictly before this match
-    return sum(
+    # Count real missed records strictly before this match (exclude miss_floor)
+    real_count = sum(
         1 for r in all_mp
         if r["user_id"] == user_id
         and r["tournament_id"] == tournament_id
         and r["status"] == "missed"
+        and r.get("note") != "miss_floor"
         and match_dt_map.get(r["match_id"], "") < this_dt
         and r["match_id"] != match_id
     )
+
+    # If a miss floor is active and its boundary is at or before this match,
+    # the player's effective prior miss count is at least allowed_misses.
+    floor_records = [r for r in all_mp
+                     if r["tournament_id"] == tournament_id
+                     and r.get("note") == "miss_floor"]
+    if floor_records:
+        floor_match_ids = {r["match_id"] for r in floor_records}
+        # Use the earliest floor boundary
+        floor_dt = min(
+            match_dt_map.get(mid, "")
+            for mid in floor_match_ids
+            if mid in match_dt_map
+        )
+        if floor_dt and floor_dt <= this_dt:
+            t_obj = next((t for t in read_table("tournaments")
+                          if t["tournament_id"] == tournament_id), None)
+            allowed = int((t_obj or {}).get("allowed_misses", 3))
+            real_count = max(real_count, allowed)
+
+    return real_count
 def calculate_match_points(match_id: str, tournament_id: str,
                             winning_option: str) -> list[dict]:
     tournament = _get_tournament(tournament_id)
@@ -126,7 +148,7 @@ def calculate_match_points(match_id: str, tournament_id: str,
 
     # Split by status — match_players has all records pre-computed
     voted_records  = [r for r in mp_match if r["status"] == "voted"]
-    missed_records = [r for r in mp_match if r["status"] == "missed"]
+    missed_records = [r for r in mp_match if r["status"] == "missed" and r.get("note") != "miss_floor"]
     quit_records   = [r for r in mp_match if r["status"] == "quit"]
     # not_started records are ignored — player wasn't participating yet
 
