@@ -21,6 +21,7 @@ from data.db    import mark_match_abandoned
 from data.match_players import (
     rebuild_for_match, rebuild_for_tournament,
     quit_player, reinstate_player, get_player_quit_status,
+    apply_miss_floor, remove_miss_floor, get_miss_floor_status,
     _match_ist_label,
 )
 from utils.email_sender import (
@@ -577,7 +578,7 @@ def _results_tab():
     still_open = [m for m in all_ms
                   if m["status"] not in ("completed", "abandoned")
                   and is_voting_open(m)]
-    done       = list(reversed([m for m in all_ms if m["status"] in ("completed", "abandoned")]))
+    done       = [m for m in all_ms if m["status"] in ("completed", "abandoned")]
 
     FRAME_H = 400   # scrollable frame height
 
@@ -875,6 +876,55 @@ def _quit_tab():
                 )
                 st.rerun()
 
+    st.markdown("")
+    st.markdown("---")
+
+    # ── Miss Floor ────────────────────────────────────────────────────────────
+    st.markdown("#### 🚫 Miss Floor (Knockout Stage)")
+    st.caption(
+        "Max out every active player's free-miss allowance from a chosen match "
+        "onwards, so any miss in the knockout stage is immediately penalised. "
+        "Run **Recalculate Tournament** afterwards to apply to points."
+    )
+
+    floor_status = get_miss_floor_status(sel_tid)
+
+    if floor_status:
+        fmid  = floor_status["from_match_id"]
+        fm    = next((m for m in sorted_ms if m["match_id"] == fmid), None)
+        flbl  = _match_ist_label(fm) if fm else fmid
+        st.info(
+            f"✅ Miss floor active from _{flbl}_ — "
+            f"{floor_status['player_count']} player(s), "
+            f"{floor_status['record_count']} synthetic record(s)."
+        )
+        if st.button("Remove Miss Floor", key="remove_floor_btn",
+                     use_container_width=False):
+            with st.spinner("Removing miss floor…"):
+                n = remove_miss_floor(sel_tid)
+            st.success(f"Miss floor removed — {n} record(s) deleted. "
+                       "Run **Recalculate Tournament** to apply.")
+            st.rerun()
+    else:
+        st.caption("No miss floor active for this tournament.")
+        with st.container(border=True):
+            fc1, fc2, fc3 = st.columns([2, 4, 2])
+            floor_label = fc2.selectbox(
+                "Apply from match (IST)", match_labels,
+                key="floor_match_sel"
+            )
+            floor_match_id = match_ids[match_labels.index(floor_label)]
+            if fc3.button("Apply Miss Floor", type="primary",
+                          key="apply_floor_btn", use_container_width=True):
+                with st.spinner("Applying miss floor…"):
+                    n = apply_miss_floor(sel_tid, floor_match_id)
+                st.success(
+                    f"Miss floor applied from _{floor_label}_ — "
+                    f"{n} synthetic record(s) written. "
+                    "Run **Recalculate Tournament** to apply to points."
+                )
+                st.rerun()
+
 
 # ── Email helper ──────────────────────────────────────────────────────────────
 
@@ -935,14 +985,7 @@ def _send_result_emails(match: dict, result: str,
         # Last 5 completed matches — latest first for email columns
         last5        = sorted_matches_asc[-5:]
         last5_ids    = [m["match_id"] for m in reversed(last5)]
-        def _email_match_label(mid: str) -> str:
-            import re
-            m = re.search(r'M0*(\d+)', mid, re.IGNORECASE)
-            if m: return f"M{m.group(1)}"
-            m = re.search(r'(\d+)$', mid)
-            if m: return f"M{int(m.group(1))}"
-            return mid[-4:]
-        last5_titles = {m["match_id"]: _email_match_label(m["match_id"]) for m in last5}
+        last5_titles = {m["match_id"]: m["title"][:10] for m in last5}
 
         # ── Email 2: leaderboard ──────────────────────────────────────────────
         send_leaderboard(match, result, lb_rows,
