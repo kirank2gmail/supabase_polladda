@@ -27,6 +27,8 @@ def _cell_html(val) -> str:
         return '<td style="color:#999;text-align:right">—</td>'
     if val == "A":
         return '<td style="background:#e0e0e0;color:#777;text-align:center;font-weight:600">A</td>'
+    if val == "Q":
+        return '<td style="background:#e8e0f0;color:#5a3e8a;text-align:center;font-weight:600">Q</td>'
     if val == "miss":
         return '<td style="background:#fff3cd;color:#8c5500;text-align:center;font-weight:600">M</td>'
     if isinstance(val, str) and val.startswith("−"):
@@ -117,6 +119,7 @@ def show_leaderboard(user: dict):
     def _fmt_dl(val):
         if val is None or val == "": return "—"
         if val == "A":    return "A"
+        if val == "Q":    return "Q"
         if val == "miss": return "M"
         if isinstance(val, str) and val.startswith("−"): return f"-{val[1:]}"
         try:
@@ -193,7 +196,8 @@ def show_leaderboard(user: dict):
         "<span style='background:#d1f0d7;padding:1px 6px;border-radius:3px;font-size:12px;color:#0e6e24'>Win</span> &nbsp;"
         "<span style='background:#fcd7d7;padding:1px 6px;border-radius:3px;font-size:12px;color:#a01414'>Loss</span> &nbsp;"
         "<span style='background:#fff3cd;padding:1px 6px;border-radius:3px;font-size:12px;color:#8c5500'>M=miss</span> &nbsp;"
-        "<span style='background:#e0e0e0;padding:1px 6px;border-radius:3px;font-size:12px;color:#777'>A=abandoned</span>",
+        "<span style='background:#e0e0e0;padding:1px 6px;border-radius:3px;font-size:12px;color:#777'>A=abandoned</span> &nbsp;"
+        "<span style='background:#e8e0f0;padding:1px 6px;border-radius:3px;font-size:12px;color:#5a3e8a'>Q=quit</span>",
         unsafe_allow_html=True
     )
 
@@ -202,7 +206,7 @@ def show_leaderboard(user: dict):
     # Bank = negative of the grand total (what wasn't distributed)
     def _cell_num(val) -> float:
         """Extract numeric value from any cell — handles float, int, '−0.5', 'miss', 'A', None."""
-        if val is None or val in ("", "A", "miss"): return 0.0
+        if val is None or val in ("", "A", "miss", "Q"): return 0.0
         if isinstance(val, (int, float)): return float(val)
         if isinstance(val, str):
             # Unicode minus e.g. "−0.5"
