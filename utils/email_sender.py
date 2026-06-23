@@ -237,15 +237,7 @@ def _render_table_png(title: str, subtitle: str,
 
         x = PAD_OUT
         for ci, (cell_bg, cell_fg, cell_txt) in enumerate(sty):
-            # Coloured cell background
-            if cell_bg is not None:
-                crect = mpatches.FancyBboxPatch(
-                    (x + 0.01, y + 0.015),
-                    col_widths[ci] - 0.02, ROW_H - 0.03,
-                    boxstyle="square,pad=0", linewidth=0,
-                    facecolor=_rgb(cell_bg), zorder=2)
-                ax.add_patch(crect)
-
+            # Text colour only — no cell background (cleaner at high DPI)
             fp = fp_bold if ci <= 1 else fp_reg
             ty = y + ROW_H * 0.62
 
@@ -262,7 +254,7 @@ def _render_table_png(title: str, subtitle: str,
 
             ax.text(tx, ty, cell_txt,
                     fontproperties=fp,
-                    color=_rgb(cell_fg), ha=ha, va="baseline", zorder=3)
+                    color=_rgb(cell_fg), ha=ha, va="baseline", zorder=2)
             x += col_widths[ci]
 
         # Bottom grid line
