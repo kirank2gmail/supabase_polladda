@@ -72,13 +72,18 @@ def _build_records_for_match(
     all_matches: list[dict],
     all_votes: list[dict],
     registrations: list[dict],
-    quit_keys: set[tuple],
+    quit_boundaries: dict[str, str],
 ) -> list[dict]:
     """
-    Build voted + missed records for a single match.
+    Build voted / missed / quit records for a single match.
+
+    quit_boundaries: {user_id: from_match_dt} — the _match_dt() value of
+        the match from which the player quit.  Any match whose _match_dt()
+        is >= that boundary gets status="quit", regardless of whether a
+        quit record already exists for that specific match_id.
 
     Returns [] for abandoned matches.
-    not_started and quit players are silently omitted.
+    not_started players produce no record.
     """
     if _is_abandoned(this_match):
         return []
@@ -121,8 +126,21 @@ def _build_records_for_match(
 
     records: list[dict] = []
     for uid in reg_users:
-        if (uid, match_id) in quit_keys:
-            continue  # preserved separately
+        # Check quit boundary first — applies to ALL matches on/after quit date,
+        # including new matches that have no existing quit record yet
+        quit_from_dt = quit_boundaries.get(uid)
+        if quit_from_dt and this_dt >= quit_from_dt:
+            records.append({
+                "mp_id"        : _uid(),
+                "match_id"     : match_id,
+                "tournament_id": tournament_id,
+                "user_id"      : uid,
+                "status"       : "quit",
+                "vote"         : "",
+                "quit_at"      : quit_from_dt,
+                "created_at"   : _now(),
+            })
+            continue
 
         voted = uid in vote_map
         fvdt  = first_vote_dt.get(uid)
@@ -194,17 +212,38 @@ def migrate_from_votes(
         tids = list({m["tournament_id"] for m in all_matches
                      if m.get("tournament_id")})
 
-    # Preserve ALL quit records up front (across every tournament)
-    quit_records = [r for r in existing_mp if r.get("status") == "quit"]
-    quit_keys    = {(r["user_id"], r["match_id"]) for r in quit_records}
-
     # Keep records that belong to tournaments we are NOT rebuilding
     other_mp = [r for r in existing_mp
-                if r.get("tournament_id") not in tids
-                and r.get("status") != "quit"]
+                if r.get("tournament_id") not in tids]
 
     new_mp: list[dict] = []
     for tid in tids:
+        # Build quit_boundaries for this tournament:
+        # {user_id: earliest quit boundary _match_dt string}
+        # quit_at holds the from_match_id passed to quit_player.
+        # We convert it to a _match_dt string so _build_records_for_match
+        # can compare directly against this_dt.
+        t_match_map = {
+            m["match_id"]: m
+            for m in all_matches
+            if m.get("tournament_id") == tid
+        }
+        quit_boundaries: dict[str, str] = {}
+        for r in existing_mp:
+            if r.get("tournament_id") != tid:
+                continue
+            if r.get("status") != "quit":
+                continue
+            uid          = r["user_id"]
+            boundary_mid = r.get("quit_at") or r["match_id"]
+            bm           = t_match_map.get(boundary_mid)
+            if not bm:
+                continue
+            boundary_dt = _match_dt(bm)
+            # Keep the earliest boundary per player
+            if uid not in quit_boundaries or boundary_dt < quit_boundaries[uid]:
+                quit_boundaries[uid] = boundary_dt
+
         # Completed (non-abandoned) matches for this tournament, oldest first
         t_matches = sorted(
             [
@@ -219,11 +258,11 @@ def migrate_from_votes(
             new_mp.extend(
                 _build_records_for_match(
                     m["match_id"], tid,
-                    m, all_matches, all_votes, registrations, quit_keys,
+                    m, all_matches, all_votes, registrations, quit_boundaries,
                 )
             )
 
-    gcs_push_fn("match_players", other_mp + quit_records + new_mp)
+    gcs_push_fn("match_players", other_mp + new_mp)
     return len(new_mp)
 
 
@@ -260,24 +299,35 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
     if not this_match:
         return 0
 
-    quit_keys = {
-        (r["user_id"], r["match_id"])
-        for r in existing_mp
-        if r.get("status") == "quit"
+    # Build quit_boundaries for this tournament from existing quit records
+    t_match_map = {
+        m["match_id"]: m
+        for m in all_matches
+        if m.get("tournament_id") == tournament_id
     }
+    quit_boundaries: dict[str, str] = {}
+    for r in existing_mp:
+        if r.get("tournament_id") != tournament_id:
+            continue
+        if r.get("status") != "quit":
+            continue
+        uid          = r["user_id"]
+        boundary_mid = r.get("quit_at") or r["match_id"]
+        bm           = t_match_map.get(boundary_mid)
+        if not bm:
+            continue
+        boundary_dt = _match_dt(bm)
+        if uid not in quit_boundaries or boundary_dt < quit_boundaries[uid]:
+            quit_boundaries[uid] = boundary_dt
 
     new_records = _build_records_for_match(
         match_id, tournament_id,
-        this_match, all_matches, all_votes, registrations, quit_keys,
+        this_match, all_matches, all_votes, registrations, quit_boundaries,
     )
 
-    # All records except this match's non-quit rows
-    other_records   = [r for r in existing_mp if r["match_id"] != match_id]
-    quit_this_match = [r for r in existing_mp
-                       if r["match_id"] == match_id
-                       and r.get("status") == "quit"]
-
-    _push("match_players", other_records + quit_this_match + new_records)
+    # Replace only this match's records (quit records now included in new_records)
+    other_records = [r for r in existing_mp if r["match_id"] != match_id]
+    _push("match_players", other_records + new_records)
     return len(new_records)
 
 
