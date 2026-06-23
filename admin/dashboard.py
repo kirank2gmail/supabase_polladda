@@ -529,6 +529,36 @@ def _recalculate_tournament(sel_tid: str):
     return recalc, abandoned, errors
 
 
+def _apply_result(match: dict, winner: str, sel_tid: str):
+    """
+    Shared logic for Save Result and Update Result:
+      rebuild match_players → calculate points → persist → email.
+    Calls st.rerun() on completion so the caller never needs to.
+    """
+    with st.spinner("Calculating points..."):
+        rebuild_for_match(match["match_id"], sel_tid)
+        records = run_points_calculation(match["match_id"], sel_tid, winner)
+
+    if records is ABANDONED:
+        mark_match_abandoned(match["match_id"])
+        st.warning(
+            f"**{match['title']}** has no votes — "
+            "marked as abandoned. No points calculated."
+        )
+    else:
+        update_match_result(match["match_id"], winner)
+        correct = sum(1 for r in records if r.get("total_points", 0) > 0)
+        st.success(
+            f"**{winner}** won — {correct} correct voter(s). "
+            "Points saved."
+        )
+        if email_configured():
+            with st.spinner("Sending emails..."):
+                _send_result_emails(match, winner, sel_tid, records)
+
+    st.rerun()
+
+
 def _results_tab():
     ts = get_tournaments()
     if not ts: st.warning("No tournaments found."); return
@@ -605,22 +635,7 @@ def _results_tab():
                     c1.caption(f"`{m['match_id']}`  ·  {m['match_date']} {m['start_time']}  ·  Scoring: **{scoring}**")
                     winner = c2.selectbox("Winner", opts, key=f"r_{m['match_id']}")
                     if c3.button("Save Result", key=f"rb_{m['match_id']}", type="primary"):
-                        with st.spinner("Calculating points..."):
-                            rebuild_for_match(m["match_id"], sel_tid)
-                            records = run_points_calculation(m["match_id"], sel_tid, winner)
-                        if records is ABANDONED:
-                            mark_match_abandoned(m["match_id"])
-                            st.warning(
-                                f"**{m['title']}** has no votes — "
-                                "automatically marked as abandoned. No points calculated."
-                            )
-                        else:
-                            update_match_result(m["match_id"], winner)
-                            correct = sum(1 for r in records if r.get("total_points", 0) > 0)
-                            st.success(f"**{winner}** won — {correct} correct voter(s)")
-                            if email_configured():
-                                _send_result_emails(m, winner, sel_tid, records)
-                        st.rerun()
+                        _apply_result(m, winner, sel_tid)
 
     st.markdown("")
 
@@ -681,22 +696,7 @@ def _results_tab():
 
                     if c3.button("Update Result", key=f"corrb_{m['match_id']}",
                                   type="primary", disabled=not changed):
-                        with st.spinner("Recalculating..."):
-                            rebuild_for_match(m["match_id"], sel_tid)
-                            records = run_points_calculation(
-                                m["match_id"], sel_tid, new_w)
-                        if records is ABANDONED:
-                            mark_match_abandoned(m["match_id"])
-                            st.warning(
-                                f"**{m['title']}** has no votes — "
-                                "marked as abandoned. No points calculated."
-                            )
-                        else:
-                            update_match_result(m["match_id"], new_w)
-                            st.success(f"Updated to **{new_w}** — points recalculated.")
-                            if email_configured():
-                                _send_result_emails(m, new_w, sel_tid, records)
-                        st.rerun()
+                        _apply_result(m, new_w, sel_tid)
 
 
 # ── Player Quit / Reinstate ───────────────────────────────────────────────────
@@ -915,37 +915,33 @@ def _send_result_emails(match: dict, result: str,
                 win_amounts[opt] = "−1 pt"
 
         # ── Email 1: poll results ─────────────────────────────────────────────
-        try:
-            send_poll_results(match, votes, win_amounts, display_names, t_name)
-            st.toast("📧 Poll results email sent!", icon="✅")
-        except Exception as e:
-            st.warning(f"Poll results email failed: {e}")
+        send_poll_results(match, votes, win_amounts, display_names, t_name)
+        st.toast("📧 Poll results email sent!", icon="✅")
 
         # ── Build leaderboard data ────────────────────────────────────────────
-        all_points    = get_points(tournament_id=tournament_id)
-        all_matches   = get_matches(tournament_id=tournament_id, status="completed")
+        all_points  = get_points(tournament_id=tournament_id)
+        # Include both completed and abandoned — same set the leaderboard page uses
+        all_matches = [m for m in get_matches(tournament_id=tournament_id)
+                       if m.get("status") in ("completed", "abandoned")]
 
         # Sort ascending for streak calc, descending for column display
-        sorted_matches_asc  = sorted(all_matches,
-                                     key=lambda m: m["match_date"] + m["start_time"])
-        match_ids_desc      = [m["match_id"] for m in reversed(sorted_matches_asc)]
+        sorted_matches_asc = sorted(all_matches,
+                                    key=lambda m: m["match_date"] + m["start_time"])
+        match_ids_desc     = [m["match_id"] for m in reversed(sorted_matches_asc)]
 
-        # Pass match_ids_desc as 4th arg (updated signature)
         lb_rows = build_leaderboard(all_points, sorted_matches_asc,
                                     match_ids_desc, all_users)
 
         # Last 5 completed matches — latest first for email columns
         last5        = sorted_matches_asc[-5:]
-        last5_ids    = [m["match_id"] for m in reversed(last5)]   # latest first
+        last5_ids    = [m["match_id"] for m in reversed(last5)]
         last5_titles = {m["match_id"]: m["title"][:10] for m in last5}
 
         # ── Email 2: leaderboard ──────────────────────────────────────────────
-        try:
-            send_leaderboard(match, result, lb_rows,
-                             last5_ids, last5_titles, t_name)
-            st.toast("📧 Leaderboard email sent!", icon="✅")
-        except Exception as e:
-            st.warning(f"Leaderboard email failed: {e}")
+        send_leaderboard(match, result, lb_rows,
+                         last5_ids, last5_titles, t_name)
+        st.toast("📧 Leaderboard email sent!", icon="✅")
 
     except Exception as e:
-        st.warning(f"Email preparation failed: {e}")
+        st.warning(f"Email failed: {e}", icon="⚠️")
+        raise   # re-raise so it appears in Streamlit logs too
