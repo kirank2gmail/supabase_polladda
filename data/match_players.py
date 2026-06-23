@@ -73,6 +73,7 @@ def _build_records_for_match(
     all_votes: list[dict],
     registrations: list[dict],
     quit_boundaries: dict[str, str],
+    existing_mp: list[dict] | None = None,
 ) -> list[dict]:
     """
     Build voted / missed / quit records for a single match.
@@ -125,8 +126,19 @@ def _build_records_for_match(
         if voted_dts:
             first_vote_dt[uid] = min(voted_dts)
 
+    # miss_floor records are synthetic — protect them from rebuild
+    floor_keys = {
+        (r["user_id"], r["match_id"])
+        for r in existing_mp
+        if r.get("note") == "miss_floor"
+        and r.get("tournament_id") == tournament_id
+    } if existing_mp else set()
+
     records: list[dict] = []
     for uid in reg_users:
+        if (uid, match_id) in floor_keys:
+            continue  # miss_floor record already exists — leave it untouched
+
         # Check quit boundary — applies to ALL matches on/after the boundary,
         # including new matches that have no existing quit record yet.
         # quit_boundaries stores from_match_id; convert to _match_dt for comparison.
@@ -270,6 +282,7 @@ def migrate_from_votes(
                 _build_records_for_match(
                     m["match_id"], tid,
                     m, all_matches, all_votes, registrations, quit_boundaries,
+                    existing_mp,
                 )
             )
 
@@ -337,6 +350,7 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
     new_records = _build_records_for_match(
         match_id, tournament_id,
         this_match, all_matches, all_votes, registrations, quit_boundaries,
+        existing_mp,
     )
 
     # Replace only this match's records (quit records now included in new_records)
@@ -517,3 +531,106 @@ def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
             s["active_matches"] += 1
 
     return status
+
+def apply_miss_floor(tournament_id: str, from_match_id: str) -> int:
+    """
+    Max out the free-miss allowance for all active players from
+    from_match_id onwards.
+
+    Writes `allowed_misses` synthetic match_players records per player,
+    all with:
+      status = "missed"
+      note   = "miss_floor"
+      match_id = from_match_id   (sorts before the knockout stage)
+
+    _count_prior_misses counts these normally, so the very first real
+    miss in the knockout stage is already beyond the threshold and is
+    penalised.  _build_records_for_match skips (uid, from_match_id)
+    pairs that already have a miss_floor record, so rebuild is safe.
+
+    Returns the number of synthetic records written.
+    """
+    from data.gcs import _fetch, _push
+
+    tournaments   = _fetch("tournaments")
+    tournament    = next((t for t in tournaments
+                          if t["tournament_id"] == tournament_id), None)
+    allowed_misses = int((tournament or {}).get("allowed_misses", 3))
+
+    existing_mp   = _fetch("match_players")
+
+    # Active players = those with any non-quit record in this tournament
+    active_uids = {
+        r["user_id"] for r in existing_mp
+        if r.get("tournament_id") == tournament_id
+        and r.get("status") != "quit"
+        and r.get("note") != "miss_floor"
+    }
+
+    # Remove any existing floor records for this tournament (idempotent)
+    cleaned = [r for r in existing_mp
+               if not (r.get("tournament_id") == tournament_id
+                       and r.get("note") == "miss_floor")]
+
+    new_records: list[dict] = []
+    for uid in active_uids:
+        for _ in range(allowed_misses):
+            new_records.append({
+                "mp_id"        : _uid(),
+                "match_id"     : from_match_id,
+                "tournament_id": tournament_id,
+                "user_id"      : uid,
+                "status"       : "missed",
+                "vote"         : "",
+                "quit_at"      : "",
+                "note"         : "miss_floor",
+                "created_at"   : _now(),
+            })
+
+    _push("match_players", cleaned + new_records)
+    return len(new_records)
+
+
+def remove_miss_floor(tournament_id: str) -> int:
+    """
+    Remove all miss_floor records for a tournament (undo apply_miss_floor).
+    Returns the number of records removed.
+    """
+    from data.gcs import _fetch, _push
+
+    existing_mp = _fetch("match_players")
+    keep   = [r for r in existing_mp
+              if not (r.get("tournament_id") == tournament_id
+                      and r.get("note") == "miss_floor")]
+    removed = len(existing_mp) - len(keep)
+    _push("match_players", keep)
+    return removed
+
+
+def get_miss_floor_status(tournament_id: str) -> dict | None:
+    """
+    Return info about the current miss floor for a tournament, or None
+    if no floor is set.
+
+    Returns:
+      {
+        "from_match_id": str,
+        "player_count":  int,
+        "record_count":  int,
+      }
+    """
+    from data.gcs import _fetch
+
+    floor_records = [r for r in _fetch("match_players")
+                     if r.get("tournament_id") == tournament_id
+                     and r.get("note") == "miss_floor"]
+    if not floor_records:
+        return None
+
+    match_ids     = {r["match_id"] for r in floor_records}
+    from_match_id = min(match_ids)   # earliest boundary match
+    return {
+        "from_match_id": from_match_id,
+        "player_count" : len({r["user_id"] for r in floor_records}),
+        "record_count" : len(floor_records),
+    }
