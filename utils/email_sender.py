@@ -30,27 +30,22 @@ def email_configured() -> bool:
     return bool(s and p and r)
 
 
-# ── Fonts ─────────────────────────────────────────────────────────────────────
+# ── Fonts — DejaVu Sans via matplotlib (fixed, no fallback chain) ────────────
 
-def _font(size: int, bold: bool = False):
-    from PIL import ImageFont
-    candidates = (
-        ["/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-         "C:/Windows/Fonts/arialbd.ttf"]
-        if bold else
-        ["/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-         "C:/Windows/Fonts/arial.ttf"]
-    )
-    for p in candidates:
-        try:
-            from PIL import ImageFont
-            return ImageFont.truetype(p, size)
-        except Exception:
-            continue
-    from PIL import ImageFont
-    return ImageFont.load_default()
+import matplotlib.font_manager as _fm
+from matplotlib import rcParams as _rcp
+
+def _setup_font():
+    """
+    Register DejaVu Sans as the global matplotlib font.
+    Called once at import time. matplotlib bundles DejaVu Sans so it is
+    always available regardless of OS.
+    """
+    _rcp["font.family"] = "DejaVu Sans"
+    _rcp["pdf.fonttype"] = 42
+    _rcp["ps.fonttype"]  = 42
+
+_setup_font()
 
 
 # ── Colours ───────────────────────────────────────────────────────────────────
@@ -96,7 +91,7 @@ def _cell_style(val):
         return None, BLACK, str(val)
 
 
-# ── PNG table renderer ────────────────────────────────────────────────────────
+# ── PNG table renderer — matplotlib @ 400 DPI ────────────────────────────────
 
 def _render_table_png(title: str, subtitle: str,
                        headers: list[str],
@@ -104,119 +99,189 @@ def _render_table_png(title: str, subtitle: str,
                        row_styles: list[list],   # list of list of (bg,fg,text) per cell
                        ) -> bytes:
     """
-    Render a clean, readable table as PNG.
-    Sizing matches the HTML email body style.
+    Render a clean table as a PNG using matplotlib at 400 DPI.
+    Font: DejaVu Sans (regular + bold).  Colours match the HTML email body.
     """
-    from PIL import Image, ImageDraw
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.font_manager import FontProperties
 
-    # Layout constants — generous, like the HTML version
-    PAD        = 28          # outer padding
-    ROW_H      = 44          # data row height
-    HDR_H      = 44          # header row height
-    TITLE_H    = 48
-    SUBTITLE_H = 32
-    FOOTER_H   = 32
-    CELL_PAD   = 14          # horizontal padding inside cell
+    DPI        = 400
 
-    font_title = _font(18, bold=True)
-    font_sub   = _font(14, bold=False)
-    font_hdr   = _font(15, bold=True)
-    font_body  = _font(14, bold=False)
-    font_body_b= _font(14, bold=True)
-    font_foot  = _font(12, bold=False)
+    # Font sizes (points — rendered at 400 DPI so they appear crisp)
+    FS_TITLE   = 9
+    FS_SUB     = 6.5
+    FS_HDR     = 6
+    FS_BODY    = 5.5
+    FS_FOOT    = 5
 
-    # Measure column widths
-    dummy = Image.new("RGB", (1, 1))
-    dc    = ImageDraw.Draw(dummy)
+    fp_reg  = FontProperties(family="DejaVu Sans", weight="normal", size=FS_BODY)
+    fp_bold = FontProperties(family="DejaVu Sans", weight="bold",   size=FS_BODY)
+    fp_hdr  = FontProperties(family="DejaVu Sans", weight="bold",   size=FS_HDR)
+    fp_title= FontProperties(family="DejaVu Sans", weight="bold",   size=FS_TITLE)
+    fp_sub  = FontProperties(family="DejaVu Sans", weight="normal", size=FS_SUB)
+    fp_foot = FontProperties(family="DejaVu Sans", weight="normal", size=FS_FOOT)
+
+    n_cols = len(headers)
+    n_rows = len(rows)
+
+    # ── Column width estimation (inches) ────────────────────────────────────
+    # Use a throw-away figure to measure text widths in display units,
+    # then convert to inches.
+    fig_tmp, ax_tmp = plt.subplots(1, 1, figsize=(1, 1), dpi=DPI)
+    renderer = fig_tmp.canvas.get_renderer()
+
+    def _text_w_in(text: str, fp: FontProperties) -> float:
+        """Measure rendered text width in inches."""
+        t = ax_tmp.text(0, 0, text, fontproperties=fp)
+        bb = t.get_window_extent(renderer=renderer)
+        t.remove()
+        return bb.width / DPI
+
+    CELL_PAD   = 0.06   # inches padding each side
+    MIN_W_RANK = 0.22
+    MIN_W_NAME = 0.80
+    MIN_W_DATA = 0.38
 
     col_widths = []
     for ci, h in enumerate(headers):
-        w = int(dc.textlength(h, font=font_hdr)) + CELL_PAD * 2
-        for row, styles in zip(rows, row_styles):
-            if ci < len(row):
-                txt = styles[ci][2] if styles else str(row[ci])
-                cw  = int(dc.textlength(str(txt), font=font_body)) + CELL_PAD * 2
-                w   = max(w, cw)
-        # Minimum widths per column type
-        if ci == 0:   w = max(w, 50)   # rank — narrow
-        elif ci == 1: w = max(w, 130)  # player name — wider
-        else:         w = max(w, 80)   # data columns
+        w = _text_w_in(h, fp_hdr) + CELL_PAD * 2
+        for row, sty in zip(rows, row_styles):
+            if ci < len(sty):
+                cw = _text_w_in(sty[ci][2], fp_bold if ci <= 1 else fp_reg) + CELL_PAD * 2
+                w  = max(w, cw)
+        if   ci == 0: w = max(w, MIN_W_RANK)
+        elif ci == 1: w = max(w, MIN_W_NAME)
+        else:         w = max(w, MIN_W_DATA)
         col_widths.append(w)
 
-    total_w = sum(col_widths) + PAD * 2
-    total_h = (PAD + TITLE_H + SUBTITLE_H + HDR_H
-               + len(rows) * ROW_H + FOOTER_H + PAD)
+    plt.close(fig_tmp)
 
-    img  = Image.new("RGB", (total_w, total_h), WHITE)
-    draw = ImageDraw.Draw(img)
+    # ── Figure dimensions ────────────────────────────────────────────────────
+    PAD_OUT    = 0.18   # outer margin inches
+    ROW_H      = 0.22   # data / header row height inches
+    TITLE_H    = 0.22
+    SUB_H      = 0.16
+    FOOTER_H   = 0.16
+    SEP        = 0.06   # gap between title block and table
 
-    # Title
-    y = PAD
-    draw.text((PAD, y), title, font=font_title, fill=TITLE_FG)
+    total_w = sum(col_widths) + PAD_OUT * 2
+    total_h = (PAD_OUT + TITLE_H + SUB_H + SEP
+               + ROW_H              # header
+               + n_rows * ROW_H
+               + FOOTER_H + PAD_OUT)
+
+    fig = plt.figure(figsize=(total_w, total_h), dpi=DPI)
+    fig.patch.set_facecolor("white")
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, total_w)
+    ax.set_ylim(0, total_h)
+    ax.axis("off")
+    ax.invert_yaxis()   # y=0 at top
+
+    def _rgb(t):
+        """Convert 0-255 tuple to 0-1 tuple for matplotlib."""
+        if t is None: return None
+        return tuple(v / 255 for v in t)
+
+    # ── Title & subtitle ────────────────────────────────────────────────────
+    y = PAD_OUT
+    ax.text(PAD_OUT, y + TITLE_H * 0.72, title,
+            fontproperties=fp_title,
+            color=_rgb(TITLE_FG), va="baseline")
     y += TITLE_H
+    ax.text(PAD_OUT, y + SUB_H * 0.72, subtitle,
+            fontproperties=fp_sub,
+            color=_rgb(SUB_FG), va="baseline")
+    y += SUB_H + SEP
 
-    draw.text((PAD, y), subtitle, font=font_sub, fill=SUB_FG)
-    y += SUBTITLE_H
-
-    # Header row
-    draw.rectangle([PAD, y, total_w - PAD, y + HDR_H], fill=HDR_BG)
-    x = PAD
+    # ── Header row ──────────────────────────────────────────────────────────
+    x = PAD_OUT
+    hdr_color = _rgb(HDR_BG)
     for ci, h in enumerate(headers):
+        rect = mpatches.FancyBboxPatch(
+            (x, y), col_widths[ci], ROW_H,
+            boxstyle="square,pad=0", linewidth=0,
+            facecolor=hdr_color, zorder=1)
+        ax.add_patch(rect)
+
         # Center rank, left-align rest
         if ci == 0:
-            tw = int(dc.textlength(h, font=font_hdr))
-            draw.text((x + (col_widths[ci] - tw) // 2, y + 14),
-                      h, font=font_hdr, fill=HDR_TEXT)
+            tx = x + col_widths[ci] / 2
+            ha = "center"
         else:
-            draw.text((x + CELL_PAD, y + 14), h, font=font_hdr, fill=HDR_TEXT)
+            tx = x + CELL_PAD
+            ha = "left"
+        ax.text(tx, y + ROW_H * 0.62, h,
+                fontproperties=fp_hdr,
+                color=_rgb(HDR_TEXT), ha=ha, va="baseline", zorder=2)
         x += col_widths[ci]
-    y += HDR_H
 
-    # Draw top border of data area
-    draw.line([PAD, y, total_w - PAD, y], fill=GRID, width=1)
+    # Thin line under header
+    ax.axhline(y + ROW_H, xmin=PAD_OUT / total_w,
+               xmax=(total_w - PAD_OUT) / total_w,
+               color=_rgb(GRID), linewidth=0.4, zorder=3)
+    y += ROW_H
 
-    # Data rows
-    for ri, (row, styles) in enumerate(zip(rows, row_styles)):
-        row_bg = GREY_BG if ri % 2 == 1 else WHITE
-        draw.rectangle([PAD, y, total_w - PAD, y + ROW_H - 1], fill=row_bg)
+    # ── Data rows ────────────────────────────────────────────────────────────
+    for ri, (row, sty) in enumerate(zip(rows, row_styles)):
+        row_bg = _rgb(GREY_BG) if ri % 2 == 1 else "white"
+        # Row background
+        bg_rect = mpatches.FancyBboxPatch(
+            (PAD_OUT, y), sum(col_widths), ROW_H,
+            boxstyle="square,pad=0", linewidth=0,
+            facecolor=row_bg, zorder=1)
+        ax.add_patch(bg_rect)
 
-        x = PAD
-        for ci, (cell_bg, cell_fg, cell_txt) in enumerate(styles):
-            # Paint cell background if coloured
-            if cell_bg is not None and cell_bg != row_bg:
-                draw.rectangle([x + 2, y + 3,
-                                x + col_widths[ci] - 3,
-                                y + ROW_H - 4],
-                               fill=cell_bg)
+        x = PAD_OUT
+        for ci, (cell_bg, cell_fg, cell_txt) in enumerate(sty):
+            # Coloured cell background
+            if cell_bg is not None:
+                crect = mpatches.FancyBboxPatch(
+                    (x + 0.01, y + 0.015),
+                    col_widths[ci] - 0.02, ROW_H - 0.03,
+                    boxstyle="square,pad=0", linewidth=0,
+                    facecolor=_rgb(cell_bg), zorder=2)
+                ax.add_patch(crect)
 
-            # Bold for rank and player columns
-            f = font_body_b if ci <= 1 else font_body
+            fp = fp_bold if ci <= 1 else fp_reg
+            ty = y + ROW_H * 0.62
 
-            # Center rank column, right-align numeric data, left-align player
-            tw = int(dc.textlength(cell_txt, font=f))
+            # Alignment: center rank, right-align data cols, left-align name
             if ci == 0:
-                tx = x + (col_widths[ci] - tw) // 2
+                tx = x + col_widths[ci] / 2
+                ha = "center"
             elif ci >= 2:
-                tx = x + col_widths[ci] - tw - CELL_PAD
+                tx = x + col_widths[ci] - CELL_PAD
+                ha = "right"
             else:
                 tx = x + CELL_PAD
+                ha = "left"
 
-            ty = y + (ROW_H - 16) // 2
-            draw.text((tx, ty), cell_txt, font=f, fill=cell_fg)
+            ax.text(tx, ty, cell_txt,
+                    fontproperties=fp,
+                    color=_rgb(cell_fg), ha=ha, va="baseline", zorder=3)
             x += col_widths[ci]
 
         # Bottom grid line
-        draw.line([PAD, y + ROW_H - 1, total_w - PAD, y + ROW_H - 1],
-                  fill=GRID, width=1)
+        ax.axhline(y + ROW_H, xmin=PAD_OUT / total_w,
+                   xmax=(total_w - PAD_OUT) / total_w,
+                   color=_rgb(GRID), linewidth=0.3, zorder=3)
         y += ROW_H
 
-    # Footer
+    # ── Footer ───────────────────────────────────────────────────────────────
     now = datetime.utcnow().strftime("%d %b %Y  %H:%M  UTC")
-    draw.text((PAD, y + 8), f"SportsPoll  ·  {now}",
-              font=font_foot, fill=GREY_TEXT)
+    ax.text(PAD_OUT, y + FOOTER_H * 0.65,
+            f"SportsPoll  ·  {now}",
+            fontproperties=fp_foot,
+            color=_rgb(GREY_TEXT), va="baseline")
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", dpi=(144, 144))
+    fig.savefig(buf, format="png", dpi=DPI,
+                facecolor="white", bbox_inches=None)
+    plt.close(fig)
     return buf.getvalue()
 
 
