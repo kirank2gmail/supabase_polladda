@@ -266,48 +266,54 @@ def _deduplicate_votes(match_id: str):
         write_table("votes", cleaned)
 
 
+def _mark_abandoned(match_id: str):
+    """Delete points and mark match as abandoned."""
+    delete_match_points(match_id)
+    matches = read_table("matches")
+    for m in matches:
+        if m["match_id"] == match_id:
+            m["result"] = "abandoned"
+            m["status"] = "abandoned"
+    write_table("matches", matches)
+
+
 def run_points_calculation(match_id: str, tournament_id: str,
                             winning_option: str):
     """
-    Dedup votes → check voters → calculate → save.
-    Returns ABANDONED (sentinel string) when no votes exist.
+    Dedup votes → check active (non-quit) voters → calculate → save.
+    Returns ABANDONED (sentinel string) when the match has no valid contest.
     Returns list[dict] of point records on success.
 
-    When abandoned:
-      - All point records for the match are deleted (clears stale misses)
-      - Match status set to "abandoned" so future miss calculations skip it
+    Abandon conditions (evaluated against non-quit voted records only):
+      - No votes at all from active players
+      - Nobody voted for the winning option
+      - All active voters picked the same option (no contest)
+
+    Quit players are excluded from abandon checks — their historical votes
+    in votes.json are irrelevant once they have quit status in match_players.
     """
     _deduplicate_votes(match_id)
 
-    match_votes = [v for v in read_table("votes")
-                   if v.get("match_id") == match_id]
+    # Use match_players as the source of truth for who is active.
+    # Quit players may still have votes in votes.json — ignore them here.
+    from data.gcs import _fetch as _gcs_fetch
+    all_mp   = _gcs_fetch("match_players")
+    mp_match = [r for r in all_mp
+                if r["match_id"] == match_id
+                and r["tournament_id"] == tournament_id]
 
-    if not match_votes:
-        # Delete all point records (winners, losers, misses) for this match
-        delete_match_points(match_id)
-        # Mark match abandoned so _count_prior_misses skips it
-        matches = read_table("matches")
-        for m in matches:
-            if m["match_id"] == match_id:
-                m["result"] = "abandoned"
-                m["status"] = "abandoned"
-        write_table("matches", matches)
+    active_voted = [r for r in mp_match if r["status"] == "voted"]
+
+    if not active_voted:
+        _mark_abandoned(match_id)
         return ABANDONED
 
-    # ── Abandon if no winners ─────────────────────────────────────────────────
-    # Case 1: nobody voted for the winning option.
-    # Case 2: all votes are for the same option (no meaningful contest).
-    # In both cases — clear points, mark abandoned, skip miss counting.
-    winner_votes   = [v for v in match_votes if v.get("vote") == winning_option]
-    unique_options = {v.get("vote") for v in match_votes}
-    if not winner_votes or len(unique_options) == 1:
-        delete_match_points(match_id)
-        matches = read_table("matches")
-        for m in matches:
-            if m["match_id"] == match_id:
-                m["result"] = "abandoned"
-                m["status"] = "abandoned"
-        write_table("matches", matches)
+    # ── Abandon if no winners or no meaningful contest ────────────────────────
+    # Evaluated only on active (non-quit) voted records.
+    winner_active  = [r for r in active_voted if r.get("vote") == winning_option]
+    unique_options = {r.get("vote") for r in active_voted}
+    if not winner_active or len(unique_options) == 1:
+        _mark_abandoned(match_id)
         return ABANDONED
 
     delete_match_points(match_id)
