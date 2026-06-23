@@ -30,12 +30,16 @@ def _is_miss(note: str) -> bool:
     return "miss" in n or "penalty" in n
 
 
+def _is_quit(note: str) -> bool:
+    return note.lower().strip() == "quit"
+
+
 def calculate_streaks(user_points: list[dict]) -> dict:
     curr_win = curr_loss = max_win = max_loss = 0
     for r in user_points:
         note = str(r.get("note", ""))
         pts  = float(r.get("total_points", 0))
-        if _is_miss(note):
+        if _is_miss(note) or _is_quit(note):
             continue
         if pts > 0:
             curr_win  += 1; curr_loss  = 0
@@ -79,7 +83,8 @@ def build_leaderboard(points: list[dict],
         sorted_pts = sorted(pts_list, key=_sort_key)
 
         voted   = [p for p in pts_list
-                   if not _is_miss(str(p.get("note", "")))]
+                   if not _is_miss(str(p.get("note", "")))
+                   and not _is_quit(str(p.get("note", "")))]
         correct = [p for p in voted if float(p.get("total_points", 0)) > 0]
         missed  = [p for p in pts_list if _is_miss(str(p.get("note", "")))]
 
@@ -115,7 +120,8 @@ def build_leaderboard(points: list[dict],
             else:
                 note = str(p.get("note", ""))
                 val  = float(p.get("total_points", 0))
-                if _is_miss(note) and val < 0:  row[mid] = f"−{abs(val)}"
+                if _is_quit(note):               row[mid] = "Q"
+                elif _is_miss(note) and val < 0: row[mid] = f"−{abs(val)}"
                 elif _is_miss(note):             row[mid] = "miss"
                 elif val > 0:                    row[mid] = val
                 elif val < 0:                    row[mid] = val
