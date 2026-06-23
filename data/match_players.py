@@ -77,10 +77,11 @@ def _build_records_for_match(
     """
     Build voted / missed / quit records for a single match.
 
-    quit_boundaries: {user_id: from_match_dt} — the _match_dt() value of
-        the match from which the player quit.  Any match whose _match_dt()
-        is >= that boundary gets status="quit", regardless of whether a
-        quit record already exists for that specific match_id.
+    quit_boundaries: {user_id: from_match_id} — the match_id from which the
+        player quit.  Any match whose _match_dt() is >= that boundary's
+        _match_dt() gets status="quit".  quit_at on written records stores
+        the same from_match_id so boundary-building on future reads is
+        consistent and unambiguous.
 
     Returns [] for abandoned matches.
     not_started players produce no record.
@@ -126,21 +127,24 @@ def _build_records_for_match(
 
     records: list[dict] = []
     for uid in reg_users:
-        # Check quit boundary first — applies to ALL matches on/after quit date,
-        # including new matches that have no existing quit record yet
-        quit_from_dt = quit_boundaries.get(uid)
-        if quit_from_dt and this_dt >= quit_from_dt:
-            records.append({
-                "mp_id"        : _uid(),
-                "match_id"     : match_id,
-                "tournament_id": tournament_id,
-                "user_id"      : uid,
-                "status"       : "quit",
-                "vote"         : "",
-                "quit_at"      : quit_from_dt,
-                "created_at"   : _now(),
-            })
-            continue
+        # Check quit boundary — applies to ALL matches on/after the boundary,
+        # including new matches that have no existing quit record yet.
+        # quit_boundaries stores from_match_id; convert to _match_dt for comparison.
+        from_mid = quit_boundaries.get(uid)
+        if from_mid:
+            from_dt = match_dt_map.get(from_mid)
+            if from_dt and this_dt >= from_dt:
+                records.append({
+                    "mp_id"        : _uid(),
+                    "match_id"     : match_id,
+                    "tournament_id": tournament_id,
+                    "user_id"      : uid,
+                    "status"       : "quit",
+                    "vote"         : "",
+                    "quit_at"      : from_mid,   # always store match_id, never datetime
+                    "created_at"   : _now(),
+                })
+                continue
 
         voted = uid in vote_map
         fvdt  = first_vote_dt.get(uid)
@@ -236,13 +240,20 @@ def migrate_from_votes(
                 continue
             uid          = r["user_id"]
             boundary_mid = r.get("quit_at") or r["match_id"]
-            bm           = t_match_map.get(boundary_mid)
+            # Guard: quit_at must be a match_id (lookup-able in t_match_map).
+            # Old records may have stored a datetime string — skip those;
+            # they will be corrected on the next rebuild.
+            bm = t_match_map.get(boundary_mid)
+            if not bm:
+                # Fall back to the record's own match_id as the boundary
+                boundary_mid = r["match_id"]
+                bm = t_match_map.get(boundary_mid)
             if not bm:
                 continue
             boundary_dt = _match_dt(bm)
             # Keep the earliest boundary per player
-            if uid not in quit_boundaries or boundary_dt < quit_boundaries[uid]:
-                quit_boundaries[uid] = boundary_dt
+            if uid not in quit_boundaries or boundary_dt < _match_dt(t_match_map[quit_boundaries[uid]]):
+                quit_boundaries[uid] = boundary_mid
 
         # Completed (non-abandoned) matches for this tournament, oldest first
         t_matches = sorted(
@@ -313,12 +324,15 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
             continue
         uid          = r["user_id"]
         boundary_mid = r.get("quit_at") or r["match_id"]
-        bm           = t_match_map.get(boundary_mid)
+        bm = t_match_map.get(boundary_mid)
+        if not bm:
+            boundary_mid = r["match_id"]
+            bm = t_match_map.get(boundary_mid)
         if not bm:
             continue
         boundary_dt = _match_dt(bm)
-        if uid not in quit_boundaries or boundary_dt < quit_boundaries[uid]:
-            quit_boundaries[uid] = boundary_dt
+        if uid not in quit_boundaries or boundary_dt < _match_dt(t_match_map[quit_boundaries[uid]]):
+            quit_boundaries[uid] = boundary_mid
 
     new_records = _build_records_for_match(
         match_id, tournament_id,
