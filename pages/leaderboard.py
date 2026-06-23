@@ -136,6 +136,24 @@ def show_leaderboard(user: dict):
     df.to_csv(csv_buf, index=False)
     csv_bytes = csv_buf.getvalue().encode()
 
+    # ── Sort control ─────────────────────────────────────────────────────────
+    SORT_OPTIONS = {
+        "Points"      : ("total_points", True),
+        "Win %"       : ("win_pct",      True),
+        "Alphabetical": ("name",         False),
+    }
+    sort_col1, sort_col2 = st.columns([2, 6])
+    sort_choice = sort_col1.selectbox(
+        "Sort by", list(SORT_OPTIONS.keys()),
+        index=0, key="lb_sort"
+    )
+    sort_key, sort_desc = SORT_OPTIONS[sort_choice]
+    lb = sorted(lb, key=lambda r: r.get(sort_key, 0 if sort_desc else ""),
+                reverse=sort_desc)
+    # Re-assign rank after re-sort
+    for i, r in enumerate(lb):
+        r["rank"] = i + 1
+
     st.markdown("### 📊 Leaderboard")
 
     # ── Build HTML table ──────────────────────────────────────────────────────
