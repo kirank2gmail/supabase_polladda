@@ -342,9 +342,8 @@ def get_user_vote(user_id: str, match_id: str) -> dict | None:
 
 def cast_vote(user_id: str, match_id: str, tid: str, vote: str):
     ensure_registered(user_id, tid)   # auto-register on first vote
-    # Write match_player record (voted status) — bypasses cache
-    upsert_match_player(match_id, tid, user_id, status="voted", vote=vote)
-    # Build new votes list locally, write async to GCS
+    # match_player is rebuilt when admin saves the result via rebuild_for_match.
+    # Writing it here would be a blocking GCS round-trip on every vote click.
     from data.gcs import read_table as _rt, write_table as _wt
     votes = [v for v in _rt("votes")
              if not (v["user_id"] == user_id and v["match_id"] == match_id)]
@@ -356,13 +355,8 @@ def cast_vote(user_id: str, match_id: str, tid: str, vote: str):
     _wt("votes", votes, async_write=True)   # instant local update, async GCS
 
 def update_vote(user_id: str, match_id: str, new_vote: str):
-    # Update match_player record with new vote
-    rows = _mp_fetch()
-    for r in rows:
-        if r["user_id"] == user_id and r["match_id"] == match_id:
-            r["vote"] = new_vote
-            break
-    _mp_push(rows)
+    # match_player is rebuilt when admin saves the result via rebuild_for_match.
+    # Writing it here would be a blocking GCS round-trip on every vote click.
     from data.gcs import read_table as _rt, write_table as _wt
     existing  = get_user_vote(user_id, match_id)
     cur_count = int((existing or {}).get("update_count", 0))
