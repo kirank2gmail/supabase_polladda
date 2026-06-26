@@ -939,9 +939,8 @@ def _send_result_emails(match: dict, result: str,
     try:
         from data.db import (
             get_votes, get_all_users, get_display_name,
-            get_matches, get_points, get_tournament
+            get_tournament
         )
-        from utils.streaks import build_leaderboard
 
         tournament    = get_tournament(tournament_id) or {}
         t_name        = tournament.get("name", tournament_id)
@@ -968,35 +967,8 @@ def _send_result_emails(match: dict, result: str,
         send_poll_results(match, votes, win_amounts, display_names, t_name)
         st.toast("📧 Poll results email sent!", icon="✅")
 
-        # ── Build leaderboard data ────────────────────────────────────────────
-        all_points  = get_points(tournament_id=tournament_id)
-        # Include both completed and abandoned — same set the leaderboard page uses
-        all_matches = [m for m in get_matches(tournament_id=tournament_id)
-                       if m.get("status") in ("completed", "abandoned")]
-
-        # Sort ascending for streak calc, descending for column display
-        sorted_matches_asc = sorted(all_matches,
-                                    key=lambda m: m["match_date"] + m["start_time"])
-        match_ids_desc     = [m["match_id"] for m in reversed(sorted_matches_asc)]
-
-        lb_rows = build_leaderboard(all_points, sorted_matches_asc,
-                                    match_ids_desc, all_users)
-
-        # Last 5 completed matches — latest first for email columns
-        last5        = sorted_matches_asc[-5:]
-        last5_ids    = [m["match_id"] for m in reversed(last5)]
-        def _email_match_label(mid: str) -> str:
-            import re
-            m = re.search(r'M0*(\d+)', mid, re.IGNORECASE)
-            if m: return f"M:{m.group(1)}"
-            m = re.search(r'(\d+)$', mid)
-            if m: return f"M:{int(m.group(1))}"
-            return mid[-4:]
-        last5_titles = {m["match_id"]: _email_match_label(m["match_id"]) for m in last5}
-
         # ── Email 2: leaderboard ──────────────────────────────────────────────
-        send_leaderboard(match, result, lb_rows,
-                         last5_ids, last5_titles, t_name)
+        send_leaderboard(match, result, tournament_id, t_name)
         st.toast("📧 Leaderboard email sent!", icon="✅")
 
     except Exception as e:
