@@ -97,10 +97,12 @@ def _render_table_png(title: str, subtitle: str,
                        headers: list[str],
                        rows: list[list],
                        row_styles: list[list],   # list of list of (bg,fg,text) per cell
+                       heroes: dict = None,       # leaderboard_heroes() output, optional
                        ) -> bytes:
     """
     Render a clean table as a PNG using matplotlib at 400 DPI.
     Font: DejaVu Sans (regular + bold).  Colours match the HTML email body.
+    If heroes is provided, a highlights section is drawn below the table.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -167,11 +169,21 @@ def _render_table_png(title: str, subtitle: str,
     FOOTER_H   = 0.16
     SEP        = 0.06   # gap between title block and table
 
+    # Highlights block dimensions (3 cards side by side)
+    HL_LABELS  = ["Win Streak", "Loss Streak", "Most Missed"]
+    HL_KEYS    = ["top_win_streak", "top_loss_streak", "top_missed"]
+    HLABEL_H   = 0.16   # section label height
+    HL_CARD_H  = 0.32   # each highlight card height
+    HL_SEP     = 0.10   # gap between table and highlights
+    has_heroes = bool(heroes)
+
+    hero_block_h = (HL_SEP + HLABEL_H + HL_CARD_H) if has_heroes else 0.0
+
     total_w = sum(col_widths) + PAD_OUT * 2
     total_h = (PAD_OUT + TITLE_H + SUB_H + SEP
                + ROW_H              # header
                + n_rows * ROW_H
-               + FOOTER_H + PAD_OUT)
+               + FOOTER_H + hero_block_h + PAD_OUT)
 
     fig = plt.figure(figsize=(total_w, total_h), dpi=DPI)
     fig.patch.set_facecolor("white")
@@ -262,6 +274,52 @@ def _render_table_png(title: str, subtitle: str,
                    xmax=(total_w - PAD_OUT) / total_w,
                    color=_rgb(GRID), linewidth=0.3, zorder=3)
         y += ROW_H
+
+    # ── Highlights ───────────────────────────────────────────────────────────
+    if has_heroes:
+        y += HL_SEP
+        # Section label
+        fp_hl_label = FontProperties(family="DejaVu Sans", weight="bold", size=5.5)
+        fp_hl_name  = FontProperties(family="DejaVu Sans", weight="bold", size=5.5)
+        fp_hl_val   = FontProperties(family="DejaVu Sans", weight="normal", size=5.0)
+        ax.text(PAD_OUT, y + HLABEL_H * 0.72, "Highlights",
+                fontproperties=fp_hl_label,
+                color=_rgb(TITLE_FG), va="baseline")
+        y += HLABEL_H
+
+        card_w     = (sum(col_widths) - 0.06) / 3
+        card_fg    = [(14, 110, 36), (160, 20, 20), (140, 80, 0)]  # win/loss/miss
+        card_bg    = [(209, 240, 215), (252, 215, 215), (255, 243, 205)]
+
+        for ci, (lbl, key) in enumerate(zip(HL_LABELS, HL_KEYS)):
+            hero    = (heroes or {}).get(key, {})
+            names   = hero.get("names", "—")
+            value   = hero.get("value", 0)
+            cx      = PAD_OUT + ci * (card_w + 0.03)
+
+            # Card background
+            card_rect = mpatches.FancyBboxPatch(
+                (cx, y), card_w, HL_CARD_H,
+                boxstyle="round,pad=0.01", linewidth=0.5,
+                edgecolor=_rgb(card_fg[ci]),
+                facecolor=_rgb(card_bg[ci]), zorder=1)
+            ax.add_patch(card_rect)
+
+            # Label line
+            ax.text(cx + 0.05, y + HL_CARD_H * 0.28, lbl,
+                    fontproperties=fp_hl_val,
+                    color=_rgb(card_fg[ci]), va="baseline", zorder=2)
+            # Player name(s)
+            ax.text(cx + 0.05, y + HL_CARD_H * 0.60, names,
+                    fontproperties=fp_hl_name,
+                    color=_rgb(card_fg[ci]), va="baseline", zorder=2)
+            # Value
+            unit = "wins" if ci == 0 else ("losses" if ci == 1 else "missed")
+            ax.text(cx + 0.05, y + HL_CARD_H * 0.88, f"{value} {unit}",
+                    fontproperties=fp_hl_val,
+                    color=_rgb(card_fg[ci]), va="baseline", zorder=2)
+
+        y += HL_CARD_H
 
     # ── Footer ───────────────────────────────────────────────────────────────
     now = datetime.utcnow().strftime("%d %b %Y  %H:%M  UTC")
@@ -384,9 +442,9 @@ def send_leaderboard(match: dict, result: str,
 
     def _mlabel(mid):
         m = re.search(r'M0*(\d+)', mid, re.IGNORECASE)
-        if m: return f"M{m.group(1)}"
+        if m: return f"M:{m.group(1)}"
         m = re.search(r'(\d+)$', mid)
-        if m: return f"M{int(m.group(1))}"
+        if m: return f"M:{int(m.group(1))}"
         return mid[-4:]
 
     m_labels = [last5_titles.get(mid, _mlabel(mid)) for mid in last5_match_ids]
@@ -464,9 +522,12 @@ def send_leaderboard(match: dict, result: str,
     rows.append(total_cells)
     styles.append(total_styles)
 
+    from utils.streaks import leaderboard_heroes
+    heroes   = leaderboard_heroes(leaderboard_rows)
+
     title    = f"Leaderboard — {tournament_name}"
-    subtitle = f"After: {match['title']}  ·  Result: {result} Won  ·  🏦 Bank: {bank_str} pts"
-    png = _render_table_png(title, subtitle, headers, rows, styles)
+    subtitle = f"After: {match['title']}  ·  Result: {result} Won  ·  Bank: {bank_str} pts"
+    png = _render_table_png(title, subtitle, headers, rows, styles, heroes)
 
     # ── HTML body ─────────────────────────────────────────────────────────────
     m_hdrs    = "".join(f"<th>{lbl}</th>" for lbl in m_labels)
