@@ -99,11 +99,33 @@ def _push_async(table: str, records: list[dict]):
     return t   # caller can .join() if they need to wait
 
 
-# ── TTL cache for votes (shared across sessions) ──────────────────────────────
+# ── Manual TTL cache for votes ───────────────────────────────────────────────
+# Unlike @st.cache_data, this lets us inject fresh records immediately after
+# a write — so reruns see the new vote with zero lag and no GCS round-trip.
+# Other users see the update when their TTL expires (same as before).
 
-@st.cache_data(ttl=VOTES_TTL, show_spinner=False)
+import time as _time
+
+_votes_cache: dict = {"data": None, "ts": 0.0}
+
+
 def _ttl_votes() -> list[dict]:
-    return _fetch("votes")
+    """Return cached votes, fetching from GCS if the TTL has expired."""
+    if _time.monotonic() - _votes_cache["ts"] > VOTES_TTL or _votes_cache["data"] is None:
+        _votes_cache["data"] = _fetch("votes")
+        _votes_cache["ts"]   = _time.monotonic()
+    return _votes_cache["data"]
+
+
+def _ttl_votes_set(records: list[dict]):
+    """Inject new records into the votes cache — used after a write."""
+    _votes_cache["data"] = records
+    _votes_cache["ts"]   = _time.monotonic()
+
+
+def _ttl_votes_clear():
+    """Force next read to re-fetch from GCS."""
+    _votes_cache["ts"] = 0.0
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _ttl_sessions() -> list[dict]:
@@ -164,22 +186,19 @@ def write_table(table: str, records: list[dict], async_write: bool = False):
       others   → clear from session cache (reloads on next read)
     """
     if async_write:
-        # Fire the GCS write in a background thread, then wait up to 2s for it
-        # to complete before clearing the TTL cache.  In practice the write
-        # finishes in < 500 ms so this adds no perceptible lag.
-        # Waiting before clearing ensures the next read_table("votes") call
-        # (on st.rerun()) always fetches the committed data, not stale GCS state.
-        t = _push_async(table, records)
+        # Inject the new records into the in-process votes cache immediately —
+        # all reads on this rerun and the next see the new vote with zero lag.
+        # GCS write happens in the background; no join needed.
         if table == "votes":
-            t.join(timeout=2)       # wait up to 2s for GCS write to land
-            _ttl_votes.clear()      # force next read to fetch fresh from GCS
+            _ttl_votes_set(records)
+        _push_async(table, records)
     else:
         # Synchronous write — wait for GCS confirmation
         _push(table, records)
         # Invalidate caches
         if table == "votes":
-            _sess_set(table, records)
-            _ttl_votes.clear()
+            _ttl_votes_set(records)
+            _ttl_votes_clear()   # force re-fetch on next read (sync write = GCS already updated)
         elif table == "sessions":
             _ttl_sessions.clear()
         elif table in SESSION_TBLS:
