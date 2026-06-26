@@ -985,7 +985,14 @@ def _send_result_emails(match: dict, result: str,
         # Last 5 completed matches — latest first for email columns
         last5        = sorted_matches_asc[-5:]
         last5_ids    = [m["match_id"] for m in reversed(last5)]
-        last5_titles = {m["match_id"]: m["title"][:10] for m in last5}
+        def _email_match_label(mid: str) -> str:
+            import re
+            m = re.search(r'M0*(\d+)', mid, re.IGNORECASE)
+            if m: return f"M:{m.group(1)}"
+            m = re.search(r'(\d+)$', mid)
+            if m: return f"M:{int(m.group(1))}"
+            return mid[-4:]
+        last5_titles = {m["match_id"]: _email_match_label(m["match_id"]) for m in last5}
 
         # ── Email 2: leaderboard ──────────────────────────────────────────────
         send_leaderboard(match, result, lb_rows,
