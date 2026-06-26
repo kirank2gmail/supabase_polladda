@@ -558,5 +558,28 @@ def send_leaderboard(match: dict, result: str,
           filename  = f"leaderboard_{match['match_id']}.png")
 
 
+# ── Send ──────────────────────────────────────────────────────────────────────
 
-# ── Send ──
+def _send(subject: str, html_body: str,
+          png_bytes: bytes = None, filename: str = "table.png"):
+    sender, app_password, recipient = _cfg()
+    if not all([sender, app_password, recipient]):
+        raise ValueError("Email not configured — add [email] to secrets.toml")
+
+    msg            = MIMEMultipart("mixed")
+    msg["Subject"] = subject
+    msg["From"]    = f"SportsPoll <{sender}>"
+    msg["To"]      = recipient
+    msg.attach(MIMEText(html_body, "html"))
+
+    if png_bytes:
+        part = MIMEBase("image", "png")
+        part.set_payload(png_bytes)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition",
+                        "attachment", filename=filename)
+        msg.attach(part)
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(sender, app_password)
+        server.sendmail(sender, recipient, msg.as_string())
