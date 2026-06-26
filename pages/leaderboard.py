@@ -1,48 +1,29 @@
 """
 pages/leaderboard.py
-Leaderboard table styled to match the email body:
-  - Dark header row, alternating row striping
-  - Colour-coded cells (green=win, red=loss, amber=miss, grey=abandoned)
-  - Right-aligned numbers, bold player names
-  - Match Details in a neat bordered frame, 6 per row
+Leaderboard page — delegates all data assembly to leaderboard_builder.
+Owns only HTML rendering and Streamlit UI logic.
 """
 
 import streamlit as st
-from data.db import get_matches, get_points, get_tournaments, get_all_users
-from utils.streaks import build_leaderboard, leaderboard_heroes
-import re
-
-
-def _match_label(match_id: str) -> str:
-    m = re.search(r'M0*(\d+)', match_id, re.IGNORECASE)
-    if m: return f"M{m.group(1)}"
-    m = re.search(r'(\d+)$', match_id)
-    if m: return f"M{int(m.group(1))}"
-    return match_id[-4:]
+from data.db import get_tournaments
+from data.leaderboard_builder import (
+    build_lb_data, match_label, cell_text, cell_colours, cell_num
+)
 
 
 def _cell_html(val) -> str:
-    """Return a <td> with colour coding matching the email body style."""
-    if val is None or val == "":
-        return '<td style="color:#999;text-align:right">—</td>'
-    if val == "A":
-        return '<td style="background:#e0e0e0;color:#777;text-align:center;font-weight:600">A</td>'
-    if val == "Q":
-        return '<td style="background:#e8e0f0;color:#5a3e8a;text-align:center;font-weight:600">Q</td>'
-    if val == "miss":
-        return '<td style="background:#fff3cd;color:#8c5500;text-align:center;font-weight:600">M</td>'
-    if isinstance(val, str) and val.startswith("−"):
-        num = val[1:]
-        return f'<td style="background:#fcd7d7;color:#a01414;text-align:right;font-weight:600">-{num}</td>'
-    try:
-        f = float(val)
-        if f > 0:
-            return f'<td style="background:#d1f0d7;color:#0e6e24;text-align:right;font-weight:600">+{f:.2f}</td>'
-        if f < 0:
-            return f'<td style="background:#fcd7d7;color:#a01414;text-align:right;font-weight:600">{f:.2f}</td>'
-        return '<td style="color:#555;text-align:right">0</td>'
-    except Exception:
-        return f'<td style="text-align:right">{val}</td>'
+    """Return a styled <td> for a match-cell value."""
+    txt      = cell_text(val)
+    fg, bg   = cell_colours(val)
+    is_blank = val is None or val == ""
+
+    if is_blank:
+        return f'<td style="color:{fg};text-align:right">—</td>'
+
+    align = "center" if val in ("A", "Q", "miss", "M") else "right"
+    bg_style = f"background:{bg};" if bg else ""
+    return (f'<td style="{bg_style}color:{fg};text-align:{align};'
+            f'font-weight:600">{txt}</td>')
 
 
 def show_leaderboard(user: dict):
@@ -59,25 +40,22 @@ def show_leaderboard(user: dict):
     sel_name = st.selectbox("🏆 Tournament", t_names, index=pre_idx)
     sel_tid  = t_ids[t_names.index(sel_name)]
 
-    points  = get_points(tournament_id=sel_tid)
-    matches = [m for m in get_matches(tournament_id=sel_tid)
-               if m["status"] in ("completed", "abandoned")]
-    users   = get_all_users()
+    data = build_lb_data(sel_tid)
+    rows          = data["rows"]
+    matches_asc   = data["matches_asc"]
+    match_ids_desc= data["match_ids_desc"]
+    col_match_ids = data["col_match_ids"]
+    labels        = data["labels"]
+    col_totals    = data["col_totals"]
+    grand_total   = data["grand_total"]
+    bank          = data["bank"]
+    heroes        = data["heroes"]
 
-    if not points:
+    if not rows:
         st.info("No results recorded yet for this tournament.")
         return
 
-    matches_asc    = sorted(matches, key=lambda m: m["match_date"] + " " + m["start_time"])
-    match_ids_desc = [m["match_id"] for m in reversed(matches_asc)]
-
-    lb = build_leaderboard(points, matches_asc, match_ids_desc, users)
-    if not lb:
-        st.info("Leaderboard not available yet.")
-        return
-
     # ── Hero stats ────────────────────────────────────────────────────────────
-    heroes = leaderboard_heroes(lb)
     if heroes:
         st.markdown("### 🎖️ Highlights")
         h1, h2, h3 = st.columns(3)
@@ -102,74 +80,55 @@ def show_leaderboard(user: dict):
 
     st.markdown("---")
 
-    # ── Toolbar: Download CSV ────────────────────────────────────────────────
+    # ── CSV download (built before sort so always points-ordered) ─────────────
     import pandas as pd, io
 
-    # Build plain DataFrame for download
-    fixed_cols = ["rank","name","total_points","win_pct","missed"]
-    all_cols   = fixed_cols + match_ids_desc
-    df = pd.DataFrame(lb)
-    df = df[[c for c in all_cols if c in df.columns]]
+    fixed_cols = ["rank", "name", "total_points", "win_pct", "missed"]
+    df = pd.DataFrame(rows)
+    df = df[[c for c in fixed_cols + match_ids_desc if c in df.columns]]
     df = df.rename(columns={
-        "rank":"#","name":"Player","total_points":"Points",
-        "win_pct":"Win%","missed":"Missed"})
-    rename_map = {mid: _match_label(mid) for mid in match_ids_desc}
+        "rank": "#", "name": "Player", "total_points": "Points",
+        "win_pct": "Win%", "missed": "Missed",
+    })
+    rename_map = {mid: labels[mid] for mid in match_ids_desc if mid in labels}
     df = df.rename(columns=rename_map)
-
-    def _fmt_dl(val):
-        if val is None or val == "": return "—"
-        if val == "A":    return "A"
-        if val == "Q":    return "Q"
-        if val == "miss": return "M"
-        if isinstance(val, str) and val.startswith("−"): return f"-{val[1:]}"
-        try:
-            f = float(val)
-            return f"+{f:.2f}" if f > 0 else (f"{f:.2f}" if f < 0 else "0")
-        except Exception:
-            return str(val)
-
     for col in rename_map.values():
         if col in df.columns:
-            df[col] = df[col].apply(_fmt_dl)
+            df[col] = df[col].apply(cell_text)
 
     csv_buf = io.StringIO()
     df.to_csv(csv_buf, index=False)
     csv_bytes = csv_buf.getvalue().encode()
 
-    # ── Sort control ─────────────────────────────────────────────────────────
+    # ── Sort control ──────────────────────────────────────────────────────────
     SORT_OPTIONS = {
         "Points"      : ("total_points", True),
         "Win %"       : ("win_pct",      True),
         "Alphabetical": ("name",         False),
     }
-    sort_col1, sort_col2 = st.columns([2, 6])
-    sort_choice = sort_col1.selectbox(
-        "Sort by", list(SORT_OPTIONS.keys()),
-        index=0, key="lb_sort"
+    sort_col, _ = st.columns([2, 6])
+    sort_choice  = sort_col.selectbox(
+        "Sort by", list(SORT_OPTIONS.keys()), index=0, key="lb_sort"
     )
     sort_key, sort_desc = SORT_OPTIONS[sort_choice]
-    lb = sorted(lb, key=lambda r: r.get(sort_key, 0 if sort_desc else ""),
-                reverse=sort_desc)
-    # Re-assign rank after re-sort
-    for i, r in enumerate(lb):
+    rows = sorted(rows,
+                  key=lambda r: r.get(sort_key, 0 if sort_desc else ""),
+                  reverse=sort_desc)
+    for i, r in enumerate(rows):
         r["rank"] = i + 1
 
     st.markdown("### 📊 Leaderboard")
 
     # ── Build HTML table ──────────────────────────────────────────────────────
-    m_labels = [_match_label(mid) for mid in match_ids_desc]
-
-    # Header
-    fixed_headers = ["#", "Player", "Points", "Win%", "Missed"]
-    all_headers   = fixed_headers + m_labels
-
-    th_style = "padding:10px 12px;text-align:left;font-weight:700;font-size:14px;white-space:nowrap"
-    th_r     = th_style.replace("text-align:left", "text-align:right")
-    th_c     = th_style.replace("text-align:left", "text-align:center")
+    m_labels  = [labels[mid] for mid in col_match_ids]
+    th_base   = "padding:10px 12px;font-weight:700;font-size:14px;white-space:nowrap"
+    th_l      = f"{th_base};text-align:left"
+    th_r      = f"{th_base};text-align:right"
+    th_c      = f"{th_base};text-align:center"
 
     header_html = (
         f'<th style="{th_c}">#</th>'
-        f'<th style="{th_style}">Player</th>'
+        f'<th style="{th_l}">Player</th>'
         f'<th style="{th_r}">Points</th>'
         f'<th style="{th_r}">Win%</th>'
         f'<th style="{th_r}">Missed</th>'
@@ -177,15 +136,15 @@ def show_leaderboard(user: dict):
     for lbl in m_labels:
         header_html += f'<th style="{th_c}">{lbl}</th>'
 
-    medals = ["🥇", "🥈", "🥉"]
-
+    medals    = ["🥇", "🥈", "🥉"]
     rows_html = ""
-    for i, row in enumerate(lb):
-        rank    = medals[i] if i < 3 else str(i + 1)
-        name    = row.get("name", "")
-        pts     = float(row.get("total_points", 0))
-        winp    = float(row.get("win_pct", 0))
-        missed  = int(row.get("missed", 0))
+
+    for i, row in enumerate(rows):
+        rank   = medals[i] if i < 3 else str(i + 1)
+        name   = row.get("name", "")
+        pts    = float(row.get("total_points", 0))
+        winp   = float(row.get("win_pct", 0))
+        missed = int(row.get("missed", 0))
 
         bg      = "#f9f9f9" if i % 2 == 1 else "#ffffff"
         pts_col = "#0e6e24" if pts >= 0 else "#a01414"
@@ -193,8 +152,7 @@ def show_leaderboard(user: dict):
         pts_str = f"+{pts:.2f}" if pts >= 0 else f"{pts:.2f}"
         miss_bg = "#fff3cd" if missed > 0 else bg
         miss_fg = "#8c5500" if missed > 0 else "#111"
-
-        td = f"padding:9px 12px;font-size:14px;border-bottom:1px solid #e8e8e8"
+        td      = "padding:9px 12px;font-size:14px;border-bottom:1px solid #e8e8e8"
 
         row_html = (
             f'<td style="{td};text-align:center;background:{bg}">{rank}</td>'
@@ -203,10 +161,8 @@ def show_leaderboard(user: dict):
             f'<td style="{td};text-align:right;background:{bg};color:#555">{winp:.0f}%</td>'
             f'<td style="{td};text-align:right;background:{miss_bg};color:{miss_fg};font-weight:600">{missed}</td>'
         )
-
-        for mid in match_ids_desc:
+        for mid in col_match_ids:
             row_html += _cell_html(row.get(mid))
-
         rows_html += f'<tr style="background:{bg}">{row_html}</tr>'
 
     st.caption(
@@ -219,36 +175,18 @@ def show_leaderboard(user: dict):
         unsafe_allow_html=True
     )
 
-    # ── Total row ────────────────────────────────────────────────────────────
-    # Sum each player's points per match column
-    # Bank = negative of the grand total (what wasn't distributed)
-    def _cell_num(val) -> float:
-        """Extract numeric value from any cell — handles float, int, '−0.5', 'miss', 'A', None."""
-        if val is None or val in ("", "A", "miss", "Q"): return 0.0
-        if isinstance(val, (int, float)): return float(val)
-        if isinstance(val, str):
-            # Unicode minus e.g. "−0.5"
-            v = val.replace("−", "-").replace("–", "-")
-            try: return float(v)
-            except ValueError: return 0.0
-        return 0.0
-
-    col_totals = {}
-    for mid in match_ids_desc:
-        col_totals[mid] = sum(_cell_num(row.get(mid)) for row in lb)
-    grand_total = sum(float(row.get("total_points", 0)) for row in lb)
-
+    # ── Total row ─────────────────────────────────────────────────────────────
     td_tot = "padding:9px 12px;font-size:14px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff;white-space:nowrap"
+    gc     = "#0e6e24" if grand_total >= 0 else "#a01414"
     total_row_html = (
         f'<td style="{td_tot};text-align:center">—</td>'
         f'<td style="{td_tot}">Total</td>'
-        f'<td style="{td_tot};text-align:right;color:{"#0e6e24" if grand_total>=0 else "#a01414"}">'
-        f'{"+" if grand_total>=0 else ""}{grand_total:.2f}</td>'
+        f'<td style="{td_tot};text-align:right;color:{gc}">{"+" if grand_total>=0 else ""}{grand_total:.2f}</td>'
         f'<td style="{td_tot}"></td>'
         f'<td style="{td_tot}"></td>'
     )
-    for mid in match_ids_desc:
-        t = col_totals.get(mid, 0.0)
+    for mid in col_match_ids:
+        t     = col_totals.get(mid, 0.0)
         color = "#0e6e24" if t > 0 else ("#a01414" if t < 0 else "#555")
         val   = f"+{t:.2f}" if t > 0 else (f"{t:.2f}" if t < 0 else "0")
         total_row_html += f'<td style="{td_tot};text-align:right;color:{color}">{val}</td>'
@@ -256,25 +194,18 @@ def show_leaderboard(user: dict):
     table_html = f"""
     <style>
       .lb-table {{ width:100%; border-collapse:collapse; font-family:Arial,sans-serif; }}
-      .lb-table td {{ white-space:nowrap; }}
-      .lb-table th {{ white-space:nowrap; }}
+      .lb-table td, .lb-table th {{ white-space:nowrap; }}
     </style>
     <div style="overflow-x:auto;border-radius:6px;border:1px solid #ddd;margin-top:8px">
       <table class="lb-table">
-        <thead>
-          <tr style="background:#28324f;color:#ffffff">{header_html}</tr>
-        </thead>
-        <tbody>
-          {rows_html}
-          <tr>{total_row_html}</tr>
-        </tbody>
+        <thead><tr style="background:#28324f;color:#ffffff">{header_html}</tr></thead>
+        <tbody>{rows_html}<tr>{total_row_html}</tr></tbody>
       </table>
     </div>
     """
     st.html(table_html)
 
-    # Bank: negative of grand total (what pool retained or paid out extra)
-    bank = -grand_total
+    # Bank
     bank_str   = f"+{bank:.2f}" if bank > 0 else f"{bank:.2f}"
     bank_color = "#0e6e24" if bank > 0 else ("#a01414" if bank < 0 else "#555")
     st.markdown(
@@ -285,17 +216,16 @@ def show_leaderboard(user: dict):
     st.download_button(
         "⬇️ Download CSV", data=csv_bytes,
         file_name=f"leaderboard_{sel_tid}.csv",
-        mime="text/csv",
-        key="lb_download"
+        mime="text/csv", key="lb_download"
     )
 
-    # ── Match Details — bordered frame, 6 per row ──────────────────────────────
+    # ── Match Details — bordered frame, 6 per row ─────────────────────────────
     if match_ids_desc:
         st.markdown("")
         st.markdown("#### 🔍 Match Details")
         COLS_PER_ROW = 6
-        chunks       = [match_ids_desc[i:i+COLS_PER_ROW]
-                        for i in range(0, len(match_ids_desc), COLS_PER_ROW)]
+        chunks  = [match_ids_desc[i:i+COLS_PER_ROW]
+                   for i in range(0, len(match_ids_desc), COLS_PER_ROW)]
         frame_h = min(len(chunks), 5) * 48 * 2 + 16
 
         with st.container(border=True, height=frame_h):
@@ -305,14 +235,12 @@ def show_leaderboard(user: dict):
                     m   = next((x for x in matches_asc if x["match_id"] == mid), None)
                     tip = m["title"] if m else mid
                     with cols[ci]:
-                        if st.button(_match_label(mid), key=f"lb_{mid}",
+                        if st.button(labels[mid], key=f"lb_{mid}",
                                      help=tip, use_container_width=True):
                             st.session_state["page"]                = "match"
                             st.session_state["match_id"]            = mid
-                            st.session_state["match_list"]          =                                 [x["match_id"] for x in matches_asc]
+                            st.session_state["match_list"]          = [x["match_id"] for x in matches_asc]
                             st.session_state["match_tournament_id"] = sel_tid
-                            # Must match a valid navbar page so navbar
-                            # doesn't detect a mismatch and override
                             st.session_state["_last_nav"]           = "leaderboard"
                             st.rerun()
                 for ci in range(len(chunk), COLS_PER_ROW):
