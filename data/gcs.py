@@ -168,9 +168,11 @@ def write_table(table: str, records: list[dict], async_write: bool = False):
         _sess_set(table, records)
         # Write GCS in background
         _push_async(table, records)
-        # Clear TTL so other users pick up the change within 30s
-        if table == "votes":
-            _ttl_votes.clear()
+        # Do NOT clear the TTL cache here — the async GCS write may not have
+        # completed by the time st.rerun() fires, causing the next read to
+        # fetch stale data from GCS (vote not yet written).
+        # Other users pick up the change when their 30s TTL expires naturally.
+        # This user's own session cache is already updated above.
     else:
         # Synchronous write — wait for GCS confirmation
         _push(table, records)
