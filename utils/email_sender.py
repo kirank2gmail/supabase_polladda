@@ -70,25 +70,7 @@ TITLE_FG   = ( 30,  40,  80)
 SUB_FG     = ( 80,  90, 110)
 
 
-def _cell_style(val):
-    """Return (bg, fg, text) for a cell value."""
-    if val is None or val == "":
-        return None, BLACK, "—"
-    if val == "A":
-        return ABAND_BG, ABAND_FG, "A"
-    if val == "miss" or val == "M":
-        return MISS_BG, MISS_FG, "M"
-    if isinstance(val, str) and val.startswith("−"):
-        return LOSS_BG, LOSS_FG, f"-{val[1:]}"
-    try:
-        f = float(val)
-        if f > 0:
-            return WIN_BG,  WIN_FG,  f"+{f:.2f}"
-        if f < 0:
-            return LOSS_BG, LOSS_FG, f"{f:.2f}"
-        return None, BLACK, "0"
-    except Exception:
-        return None, BLACK, str(val)
+
 
 
 # ── PNG table renderer — matplotlib @ 400 DPI ────────────────────────────────
@@ -169,14 +151,13 @@ def _render_table_png(title: str, subtitle: str,
     FOOTER_H   = 0.16
     SEP        = 0.06   # gap between title block and table
 
-    # Highlights block dimensions (3 cards side by side)
+    # Highlights block geometry
     HL_LABELS  = ["Win Streak", "Loss Streak", "Most Missed"]
     HL_KEYS    = ["top_win_streak", "top_loss_streak", "top_missed"]
-    HLABEL_H   = 0.16   # section label height
-    HL_CARD_H  = 0.32   # each highlight card height
-    HL_SEP     = 0.10   # gap between table and highlights
+    HLABEL_H   = 0.16
+    HL_CARD_H  = 0.32
+    HL_SEP     = 0.10
     has_heroes = bool(heroes)
-
     hero_block_h = (HL_SEP + HLABEL_H + HL_CARD_H) if has_heroes else 0.0
 
     total_w = sum(col_widths) + PAD_OUT * 2
@@ -278,47 +259,41 @@ def _render_table_png(title: str, subtitle: str,
     # ── Highlights ───────────────────────────────────────────────────────────
     if has_heroes:
         y += HL_SEP
-        # Section label
-        fp_hl_label = FontProperties(family="DejaVu Sans", weight="bold", size=5.5)
-        fp_hl_name  = FontProperties(family="DejaVu Sans", weight="bold", size=5.5)
+        fp_hl_label = FontProperties(family="DejaVu Sans", weight="bold",   size=5.5)
+        fp_hl_name  = FontProperties(family="DejaVu Sans", weight="bold",   size=5.5)
         fp_hl_val   = FontProperties(family="DejaVu Sans", weight="normal", size=5.0)
         ax.text(PAD_OUT, y + HLABEL_H * 0.72, "Highlights",
                 fontproperties=fp_hl_label,
                 color=_rgb(TITLE_FG), va="baseline")
         y += HLABEL_H
 
-        card_w     = (sum(col_widths) - 0.06) / 3
-        card_fg    = [(14, 110, 36), (160, 20, 20), (140, 80, 0)]  # win/loss/miss
-        card_bg    = [(209, 240, 215), (252, 215, 215), (255, 243, 205)]
+        card_w   = (sum(col_widths) - 0.06) / 3
+        card_fgs = [WIN_FG, LOSS_FG, MISS_FG]
+        card_bgs = [(209,240,215), (252,215,215), (255,243,205)]
 
         for ci, (lbl, key) in enumerate(zip(HL_LABELS, HL_KEYS)):
-            hero    = (heroes or {}).get(key, {})
-            names   = hero.get("names", "—")
-            value   = hero.get("value", 0)
-            cx      = PAD_OUT + ci * (card_w + 0.03)
+            hero  = (heroes or {}).get(key, {})
+            names = hero.get("names", "—")
+            value = hero.get("value", 0)
+            cx    = PAD_OUT + ci * (card_w + 0.03)
+            unit  = "wins" if ci == 0 else ("losses" if ci == 1 else "missed")
 
-            # Card background
             card_rect = mpatches.FancyBboxPatch(
                 (cx, y), card_w, HL_CARD_H,
                 boxstyle="round,pad=0.01", linewidth=0.5,
-                edgecolor=_rgb(card_fg[ci]),
-                facecolor=_rgb(card_bg[ci]), zorder=1)
+                edgecolor=_rgb(card_fgs[ci]),
+                facecolor=_rgb(card_bgs[ci]), zorder=1)
             ax.add_patch(card_rect)
 
-            # Label line
             ax.text(cx + 0.05, y + HL_CARD_H * 0.28, lbl,
                     fontproperties=fp_hl_val,
-                    color=_rgb(card_fg[ci]), va="baseline", zorder=2)
-            # Player name(s)
+                    color=_rgb(card_fgs[ci]), va="baseline", zorder=2)
             ax.text(cx + 0.05, y + HL_CARD_H * 0.60, names,
                     fontproperties=fp_hl_name,
-                    color=_rgb(card_fg[ci]), va="baseline", zorder=2)
-            # Value
-            unit = "wins" if ci == 0 else ("losses" if ci == 1 else "missed")
+                    color=_rgb(card_fgs[ci]), va="baseline", zorder=2)
             ax.text(cx + 0.05, y + HL_CARD_H * 0.88, f"{value} {unit}",
                     fontproperties=fp_hl_val,
-                    color=_rgb(card_fg[ci]), va="baseline", zorder=2)
-
+                    color=_rgb(card_fgs[ci]), va="baseline", zorder=2)
         y += HL_CARD_H
 
     # ── Footer ───────────────────────────────────────────────────────────────
@@ -433,136 +408,108 @@ def send_poll_results(match: dict, votes: list[dict],
 # ── Leaderboard ───────────────────────────────────────────────────────────────
 
 def send_leaderboard(match: dict, result: str,
-                     leaderboard_rows: list[dict],
-                     last5_match_ids: list[str],
-                     last5_titles: dict,
+                     tournament_id: str,
                      tournament_name: str):
+    """
+    Build and send the leaderboard email.
+    All data assembly delegated to leaderboard_builder.build_lb_data().
+    Email columns show the last 5 completed matches.
+    """
+    from data.leaderboard_builder import build_lb_data, cell_text, cell_colours
 
-    import re
+    data          = build_lb_data(tournament_id, last_n_matches=5)
+    rows          = data["rows"]
+    col_match_ids = data["col_match_ids"]
+    labels        = data["labels"]
+    col_totals    = data["col_totals"]
+    grand_total   = data["grand_total"]
+    bank          = data["bank"]
+    heroes        = data["heroes"]
 
-    def _mlabel(mid):
-        m = re.search(r'M0*(\d+)', mid, re.IGNORECASE)
-        if m: return f"M:{m.group(1)}"
-        m = re.search(r'(\d+)$', mid)
-        if m: return f"M:{int(m.group(1))}"
-        return mid[-4:]
-
-    m_labels = [last5_titles.get(mid, _mlabel(mid)) for mid in last5_match_ids]
+    bank_str = f"+{bank:.2f}" if bank >= 0 else f"{bank:.2f}"
+    gt_str   = f"+{grand_total:.2f}" if grand_total >= 0 else f"{grand_total:.2f}"
+    m_labels = [labels[mid] for mid in col_match_ids]
     medals   = ["1", "2", "3"]
 
-    # ── Build PNG ─────────────────────────────────────────────────────────────
-    headers = ["#", "Player", "Points", "Win%", "Missed"] + m_labels
-    rows, styles = [], []
+    # ── Build PNG rows & styles ───────────────────────────────────────────────
+    png_rows, png_styles = [], []
 
-    for i, row in enumerate(leaderboard_rows):
-        rank  = medals[i] if i < 3 else str(i + 1)
-        name  = str(row.get("name", ""))
-        pts   = float(row.get("total_points", 0))
-        winp  = float(row.get("win_pct", 0))
-        miss  = int(row.get("missed", 0))
-
+    for i, row in enumerate(rows):
+        rank    = medals[i] if i < 3 else str(i + 1)
+        name    = str(row.get("name", ""))
+        pts     = float(row.get("total_points", 0))
+        winp    = float(row.get("win_pct", 0))
+        miss    = int(row.get("missed", 0))
         pts_str = f"+{pts:.2f}" if pts >= 0 else f"{pts:.2f}"
-        pts_bg  = WIN_BG  if pts >= 0 else LOSS_BG
         pts_fg  = WIN_FG  if pts >= 0 else LOSS_FG
-        miss_bg = MISS_BG if miss > 0 else None
         miss_fg = MISS_FG if miss > 0 else BLACK
 
         row_cells  = [rank, name, pts_str, f"{winp:.0f}%", str(miss)]
         row_styles = [
-            (None,   BLACK,   rank),
-            (None,   BLACK,   name),
-            (pts_bg, pts_fg,  pts_str),
-            (None,   GREY_TEXT, f"{winp:.0f}%"),
-            (miss_bg,miss_fg, str(miss)),
+            (None, BLACK,  rank),
+            (None, BLACK,  name),
+            (None, pts_fg,         pts_str),
+            (None, GREY_TEXT,   f"{winp:.0f}%"),
+            (None, miss_fg,        str(miss)),
         ]
 
-        for mid in last5_match_ids:
-            val = row.get(mid)
-            bg, fg, txt = _cell_style(val)
+        for mid in col_match_ids:
+            val      = row.get(mid)
+            txt      = cell_text(val)
+            fg_hex, _= cell_colours(val)
+            # Convert hex → RGB tuple for matplotlib
+            fg_rgb   = tuple(int(fg_hex.lstrip("#")[i:i+2], 16) for i in (0,2,4))
             row_cells.append(txt)
-            row_styles.append((bg, fg, txt))
+            row_styles.append((None, fg_rgb, txt))
 
-        rows.append(row_cells)
-        styles.append(row_styles)
+        png_rows.append(row_cells)
+        png_styles.append(row_styles)
 
-    # ── Total row helpers ────────────────────────────────────────────────────
-    def _n(val) -> float:
-        """Numeric value from any cell including miss/penalty strings."""
-        if val is None or val in ("", "A", "miss"): return 0.0
-        if isinstance(val, (int, float)): return float(val)
-        if isinstance(val, str):
-            try: return float(val.replace("−", "-").replace("–", "-"))
-            except ValueError: return 0.0
-        return 0.0
-
-    grand_total = sum(float(r.get("total_points", 0)) for r in leaderboard_rows)
-    col_totals  = {mid: sum(_n(r.get(mid)) for r in leaderboard_rows)
-                   for mid in last5_match_ids}
-    bank        = -grand_total
-    bank_str    = f"+{bank:.2f}"        if bank >= 0 else f"{bank:.2f}"
-    gt_str      = f"+{grand_total:.2f}" if grand_total >= 0 else f"{grand_total:.2f}"
-
-    # ── PNG total row ────────────────────────────────────────────────────────
-    total_cells  = ["—", "Total", gt_str, "", ""]
-    total_styles = [
+    # Total row
+    tc_cells  = ["—", "Total", gt_str, "", ""]
+    tc_fg     = WIN_FG if grand_total >= 0 else LOSS_FG
+    tc_styles = [
         (None, BLACK, "—"),
         (None, BLACK, "Total"),
-        ((209,240,215) if grand_total>=0 else (252,215,215),
-         (14,110,36)   if grand_total>=0 else (160,20,20), gt_str),
+        (None, tc_fg,         gt_str),
         (None, BLACK, ""),
         (None, BLACK, ""),
     ]
-    for mid in last5_match_ids:
-        t = col_totals.get(mid, 0.0)
-        v = f"+{t:.2f}" if t > 0 else (f"{t:.2f}" if t < 0 else "0")
-        bg = (209,240,215) if t > 0 else ((252,215,215) if t < 0 else None)
-        fg = (14,110,36)   if t > 0 else ((160,20,20)   if t < 0 else BLACK)
-        total_cells.append(v)
-        total_styles.append((bg, fg, v))
-    rows.append(total_cells)
-    styles.append(total_styles)
+    for mid in col_match_ids:
+        t     = col_totals.get(mid, 0.0)
+        v     = f"+{t:.2f}" if t > 0 else (f"{t:.2f}" if t < 0 else "0")
+        fg    = WIN_FG if t > 0 else (LOSS_FG if t < 0 else GREY_TEXT)
+        tc_cells.append(v)
+        tc_styles.append((None, fg, v))
+    png_rows.append(tc_cells)
+    png_styles.append(tc_styles)
 
-    from utils.streaks import leaderboard_heroes
-    heroes   = leaderboard_heroes(leaderboard_rows)
-
-    title    = f"Leaderboard — {tournament_name}"
-    subtitle = f"After: {match['title']}  ·  Result: {result} Won  ·  Bank: {bank_str} pts"
-    png = _render_table_png(title, subtitle, headers, rows, styles, heroes)
+    headers = ["#", "Player", "Points", "Win%", "Missed"] + m_labels
+    title   = f"Leaderboard — {tournament_name}"
+    sub     = f"After: {match['title']}  ·  Result: {result} Won  ·  Bank: {bank_str} pts"
+    png     = _render_table_png(title, sub, headers, png_rows, png_styles, heroes)
 
     # ── HTML body ─────────────────────────────────────────────────────────────
-    m_hdrs    = "".join(f"<th>{lbl}</th>" for lbl in m_labels)
-    medal_icons = ["🥇","🥈","🥉"]
-    rows_html = ""
+    medal_icons = ["🥇", "🥈", "🥉"]
+    m_hdrs      = "".join(f"<th>{lbl}</th>" for lbl in m_labels)
+    rows_html   = ""
 
-    for i, row in enumerate(leaderboard_rows):
-        rank  = medal_icons[i] if i < 3 else str(i + 1)
-        name  = row.get("name","")
-        pts   = float(row.get("total_points",0))
-        winp  = float(row.get("win_pct",0))
-        miss  = int(row.get("missed",0))
-        pts_c = "#16a34a" if pts >= 0 else "#dc2626"
-        pts_s = f"+{pts:.2f}" if pts >= 0 else f"{pts:.2f}"
+    for i, row in enumerate(rows):
+        rank    = medal_icons[i] if i < 3 else str(i + 1)
+        name    = row.get("name", "")
+        pts     = float(row.get("total_points", 0))
+        winp    = float(row.get("win_pct", 0))
+        miss    = int(row.get("missed", 0))
+        pts_c   = "#16a34a" if pts >= 0 else "#dc2626"
+        pts_s   = f"+{pts:.2f}" if pts >= 0 else f"{pts:.2f}"
 
         mcells = ""
-        for mid in last5_match_ids:
-            val = row.get(mid)
-            if val is None or val == "":
-                mcells += "<td>—</td>"
-            elif val == "A":
-                mcells += '<td style="color:#888;background:#ddd">A</td>'
-            elif val == "miss" or val == "M":
-                mcells += '<td style="color:#d97706">M</td>'
-            elif isinstance(val, str) and (val.startswith("−") or val.startswith("-")):
-                v = val.replace("−", "-")
-                mcells += f'<td style="color:#dc2626">{v}</td>'
-            else:
-                try:
-                    fv  = float(val)
-                    c   = "#16a34a" if fv > 0 else ("#dc2626" if fv < 0 else "#555")
-                    txt = f"+{fv:.2f}" if fv > 0 else (f"{fv:.2f}" if fv < 0 else "0")
-                    mcells += f'<td style="color:{c}">{txt}</td>'
-                except Exception:
-                    mcells += f"<td>{val}</td>"
+        for mid in col_match_ids:
+            val      = row.get(mid)
+            txt      = cell_text(val)
+            fg, bg   = cell_colours(val)
+            bg_style = f"background:{bg};" if bg else ""
+            mcells  += f'<td style="{bg_style}color:{fg}">{txt}</td>'
 
         rows_html += f"""<tr>
           <td style="text-align:center">{rank}</td>
@@ -571,71 +518,45 @@ def send_leaderboard(match: dict, result: str,
           <td>{winp:.0f}%</td>
           <td>{miss}</td>{mcells}</tr>"""
 
-    # ── HTML total row ────────────────────────────────────────────────────────
-    _th = "padding:8px 10px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff"
-    _gc = "#0e6e24" if grand_total >= 0 else "#a01414"
-    _bc = "#0e6e24" if bank >= 0 else "#a01414"
-    _html_total_row  = "<tr>"
-    _html_total_row += f'<td style="{_th};text-align:center">—</td>'
-    _html_total_row += f'<td style="{_th}"><b>Total</b></td>'
-    _html_total_row += f'<td style="{_th};text-align:right;color:{_gc}"><b>{gt_str}</b></td>'
-    _html_total_row += f'<td style="{_th}"></td>'
-    _html_total_row += f'<td style="{_th}"></td>'
-    for _mid in last5_match_ids:
-        _t = col_totals.get(_mid, 0.0)
-        _c = "#0e6e24" if _t > 0 else ("#a01414" if _t < 0 else "#555")
-        _v = f"+{_t:.2f}" if _t > 0 else (f"{_t:.2f}" if _t < 0 else "0")
-        _html_total_row += f'<td style="{_th};text-align:right;color:{_c}"><b>{_v}</b></td>'
-    _html_total_row += "</tr>"
+    _th  = "padding:8px 10px;font-weight:700;border-top:2px solid #28324f;background:#f0f4ff"
+    _gc  = "#0e6e24" if grand_total >= 0 else "#a01414"
+    _bc  = "#0e6e24" if bank >= 0 else "#a01414"
+    total_row = "<tr>"
+    total_row += f'<td style="{_th};text-align:center">—</td>'
+    total_row += f'<td style="{_th}"><b>Total</b></td>'
+    total_row += f'<td style="{_th};color:{_gc}"><b>{gt_str}</b></td>'
+    total_row += f'<td style="{_th}"></td><td style="{_th}"></td>'
+    for mid in col_match_ids:
+        t  = col_totals.get(mid, 0.0)
+        c  = "#0e6e24" if t > 0 else ("#a01414" if t < 0 else "#555")
+        v  = f"+{t:.2f}" if t > 0 else (f"{t:.2f}" if t < 0 else "0")
+        total_row += f'<td style="{_th};color:{c}"><b>{v}</b></td>'
+    total_row += "</tr>"
 
     html = f"""<!DOCTYPE html><html><body
       style="font-family:Arial,sans-serif;background:#fff;padding:24px;color:#111">
       <h2 style="color:#1a2850">Leaderboard — {tournament_name}</h2>
-      <p><b>After:</b> {match['title']}<br>
-         <b>Result:</b> {result} Won</p>
+      <p><b>After:</b> {match['title']}<br><b>Result:</b> {result} Won</p>
       <table border="1" cellpadding="10" cellspacing="0"
              style="border-collapse:collapse;width:100%;font-size:14px">
         <tr style="background:#28324f;color:#fff">
           <th>#</th><th>Player</th><th>Points</th>
           <th>Win%</th><th>Missed</th>{m_hdrs}
-        </tr>{rows_html}{_html_total_row}
+        </tr>{rows_html}{total_row}
       </table>
       <p style="margin-top:8px">
         🏦 <b>Bank:</b>
         <span style="color:{_bc};font-weight:700">{bank_str} pts</span>
       </p>
       <p style="font-size:12px;color:#aaa;margin-top:8px">
-        Last {len(last5_match_ids)} completed matches (latest first).<br>
+        Last {len(col_match_ids)} completed matches (latest first).<br>
         See attached PNG for shareable version.</p>
     </body></html>"""
 
-    _send(subject  = f"[{tournament_name}] Leaderboard after {match['title']}",
-          html_body= html, png_bytes=png,
-          filename = f"leaderboard_{match['match_id']}.png")
+    _send(subject   = f"[{tournament_name}] Leaderboard after {match['title']}",
+          html_body = html, png_bytes=png,
+          filename  = f"leaderboard_{match['match_id']}.png")
 
 
-# ── Send ──────────────────────────────────────────────────────────────────────
 
-def _send(subject: str, html_body: str,
-          png_bytes: bytes = None, filename: str = "table.png"):
-    sender, app_password, recipient = _cfg()
-    if not all([sender, app_password, recipient]):
-        raise ValueError("Email not configured — add [email] to secrets.toml")
-
-    msg            = MIMEMultipart("mixed")
-    msg["Subject"] = subject
-    msg["From"]    = f"SportsPoll <{sender}>"
-    msg["To"]      = recipient
-    msg.attach(MIMEText(html_body, "html"))
-
-    if png_bytes:
-        part = MIMEBase("image", "png")
-        part.set_payload(png_bytes)
-        encoders.encode_base64(part)
-        part.add_header("Content-Disposition",
-                        "attachment", filename=filename)
-        msg.attach(part)
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(sender, app_password)
-        server.sendmail(sender, recipient, msg.as_string())
+# ── Send ──
