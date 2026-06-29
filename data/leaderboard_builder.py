@@ -180,6 +180,20 @@ def build_lb_data(
 
     heroes = leaderboard_heroes(rows)
 
+    # Manual penalties — positive amounts that flow to the bank
+    from data.db import get_penalties, get_display_name as _dn
+    raw_penalties  = get_penalties(tournament_id)
+    penalty_total  = round(sum(float(p["points"]) for p in raw_penalties), 3)
+
+    # Enrich with display name for renderers
+    penalties = [
+        {**p, "player_name": _dn(p["user_id"])}
+        for p in raw_penalties
+    ]
+
+    # Bank = what the pool retained + manual penalties
+    adjusted_bank = round(bank + penalty_total, 3)
+
     return {
         "rows"          : rows,
         "matches_asc"   : matches_asc,
@@ -188,6 +202,8 @@ def build_lb_data(
         "labels"        : labels,
         "col_totals"    : col_totals,
         "grand_total"   : grand_total,
-        "bank"          : bank,
+        "bank"          : adjusted_bank,
+        "penalty_total" : penalty_total,
+        "penalties"     : penalties,
         "heroes"        : heroes,
     }
