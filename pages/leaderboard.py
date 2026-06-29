@@ -219,6 +219,40 @@ def show_leaderboard(user: dict):
         mime="text/csv", key="lb_download"
     )
 
+    # ── Manual Penalties ─────────────────────────────────────────────────────
+    penalties = data.get("penalties", [])
+    if penalties:
+        st.markdown("")
+        st.markdown("#### 💸 Manual Penalties")
+        pen_html = ""
+        td_p = "padding:8px 12px;font-size:14px;border-bottom:1px solid #e8e8e8"
+        for p in penalties:
+            pts_str = f"-{float(p['points']):.2f}"
+            date_str = p.get("created_at", "")[:10]
+            pen_html += (
+                f'<tr>'
+                f'<td style="{td_p};font-weight:600">{p["player_name"]}</td>'
+                f'<td style="{td_p};color:#a01414;font-weight:700">{pts_str}</td>'
+                f'<td style="{td_p};color:#555">{p["reason"]}</td>'
+                f'<td style="{td_p};color:#999;font-size:12px">{date_str}</td>'
+                f'</tr>'
+            )
+        pen_table = f"""
+        <div style="overflow-x:auto;border-radius:6px;border:1px solid #ddd;margin-top:4px">
+          <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif">
+            <thead>
+              <tr style="background:#28324f;color:#fff">
+                <th style="padding:9px 12px;text-align:left">Player</th>
+                <th style="padding:9px 12px;text-align:left">Points</th>
+                <th style="padding:9px 12px;text-align:left">Reason</th>
+                <th style="padding:9px 12px;text-align:left">Date</th>
+              </tr>
+            </thead>
+            <tbody>{pen_html}</tbody>
+          </table>
+        </div>"""
+        st.html(pen_table)
+
     # ── Match Details — bordered frame, 6 per row ─────────────────────────────
     if match_ids_desc:
         st.markdown("")
