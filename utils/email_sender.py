@@ -80,11 +80,13 @@ def _render_table_png(title: str, subtitle: str,
                        rows: list[list],
                        row_styles: list[list],   # list of list of (bg,fg,text) per cell
                        heroes: dict = None,       # leaderboard_heroes() output, optional
+                       penalties: list[dict] = None,  # manual penalties, optional
                        ) -> bytes:
     """
     Render a clean table as a PNG using matplotlib at 400 DPI.
     Font: DejaVu Sans (regular + bold).  Colours match the HTML email body.
     If heroes is provided, a highlights section is drawn below the table.
+    If penalties is provided, a penalty list is drawn below highlights.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -157,14 +159,19 @@ def _render_table_png(title: str, subtitle: str,
     HLABEL_H   = 0.16
     HL_CARD_H  = 0.32
     HL_SEP     = 0.10
-    has_heroes = bool(heroes)
-    hero_block_h = (HL_SEP + HLABEL_H + HL_CARD_H) if has_heroes else 0.0
+    has_heroes   = bool(heroes)
+    has_penalties = bool(penalties)
+    hero_block_h  = (HL_SEP + HLABEL_H + HL_CARD_H) if has_heroes else 0.0
+    PEN_ROW_H     = 0.18
+    PEN_LABEL_H   = 0.16
+    PEN_SEP       = 0.08
+    pen_block_h   = (PEN_SEP + PEN_LABEL_H + len(penalties) * PEN_ROW_H) if has_penalties else 0.0
 
     total_w = sum(col_widths) + PAD_OUT * 2
     total_h = (PAD_OUT + TITLE_H + SUB_H + SEP
                + ROW_H              # header
                + n_rows * ROW_H
-               + FOOTER_H + hero_block_h + PAD_OUT)
+               + FOOTER_H + hero_block_h + pen_block_h + PAD_OUT)
 
     fig = plt.figure(figsize=(total_w, total_h), dpi=DPI)
     fig.patch.set_facecolor("white")
@@ -296,6 +303,44 @@ def _render_table_png(title: str, subtitle: str,
                     color=_rgb(card_fgs[ci]), va="baseline", zorder=2)
         y += HL_CARD_H
 
+    # ── Penalties ────────────────────────────────────────────────────────────
+    if has_penalties:
+        y += PEN_SEP
+        fp_pen_label = FontProperties(family="DejaVu Sans", weight="bold",   size=5.5)
+        fp_pen_body  = FontProperties(family="DejaVu Sans", weight="normal", size=5.0)
+        fp_pen_pts   = FontProperties(family="DejaVu Sans", weight="bold",   size=5.0)
+        ax.text(PAD_OUT, y + PEN_LABEL_H * 0.72, "Manual Penalties",
+                fontproperties=fp_pen_label,
+                color=_rgb(TITLE_FG), va="baseline")
+        y += PEN_LABEL_H
+
+        for pi, p in enumerate(penalties or []):
+            row_bg = _rgb(GREY_BG) if pi % 2 == 1 else "white"
+            bg_rect = mpatches.FancyBboxPatch(
+                (PAD_OUT, y), sum(col_widths), PEN_ROW_H,
+                boxstyle="square,pad=0", linewidth=0,
+                facecolor=row_bg, zorder=1)
+            ax.add_patch(bg_rect)
+
+            pts_str  = f"-{float(p['points']):.2f}"
+            date_str = p.get("created_at", "")[:10]
+            reason   = p.get("reason", "")
+            name     = p.get("player_name", p.get("user_id", ""))
+
+            ty = y + PEN_ROW_H * 0.65
+            col_x = PAD_OUT
+            # Name (25% width), Points (15%), Reason (45%), Date (15%)
+            total_col_w = sum(col_widths)
+            ax.text(col_x,                        ty, name,     fontproperties=fp_pen_body, color=_rgb(BLACK),   va="baseline", zorder=2)
+            ax.text(col_x + total_col_w * 0.28,   ty, pts_str,  fontproperties=fp_pen_pts,  color=_rgb(LOSS_FG), va="baseline", zorder=2)
+            ax.text(col_x + total_col_w * 0.40,   ty, reason,   fontproperties=fp_pen_body, color=_rgb(BLACK),   va="baseline", zorder=2)
+            ax.text(col_x + total_col_w * 0.88,   ty, date_str, fontproperties=fp_pen_body, color=_rgb(GREY_TEXT),va="baseline", zorder=2)
+
+            ax.axhline(y + PEN_ROW_H, xmin=PAD_OUT / total_w,
+                       xmax=(total_w - PAD_OUT) / total_w,
+                       color=_rgb(GRID), linewidth=0.3, zorder=3)
+            y += PEN_ROW_H
+
     # ── Footer ───────────────────────────────────────────────────────────────
     now = datetime.utcnow().strftime("%d %b %Y  %H:%M  UTC")
     ax.text(PAD_OUT, y + FOOTER_H * 0.65,
@@ -311,6 +356,35 @@ def _render_table_png(title: str, subtitle: str,
 
 
 # ── Poll results ──────────────────────────────────────────────────────────────
+
+def _penalties_html(penalties: list[dict]) -> str:
+    """Build an HTML penalties table for the email body."""
+    if not penalties:
+        return ""
+    rows_html = ""
+    for p in penalties:
+        pts_str  = f"-{float(p['points']):.2f}"
+        date_str = p.get("created_at", "")[:10]
+        rows_html += (
+            f'<tr>'
+            f'<td style="padding:7px 10px">{p["player_name"]}</td>'
+            f'<td style="padding:7px 10px;color:#a01414;font-weight:700">{pts_str}</td>'
+            f'<td style="padding:7px 10px">{p["reason"]}</td>'
+            f'<td style="padding:7px 10px;color:#999;font-size:12px">{date_str}</td>'
+            f'</tr>'
+        )
+    return f"""
+      <h3 style="color:#1a2850;margin-top:24px">Manual Penalties</h3>
+      <table border="1" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse;font-size:14px;font-family:Arial,sans-serif">
+        <tr style="background:#28324f;color:#fff">
+          <th style="padding:8px 10px;text-align:left">Player</th>
+          <th style="padding:8px 10px;text-align:left">Points</th>
+          <th style="padding:8px 10px;text-align:left">Reason</th>
+          <th style="padding:8px 10px;text-align:left">Date</th>
+        </tr>{rows_html}
+      </table>"""
+
 
 def send_poll_results(match: dict, votes: list[dict],
                       win_amounts: dict, display_names: dict,
@@ -425,6 +499,8 @@ def send_leaderboard(match: dict, result: str,
     grand_total   = data["grand_total"]
     bank          = data["bank"]
     heroes        = data["heroes"]
+    penalties     = data.get("penalties", [])
+    penalty_total = data.get("penalty_total", 0.0)
 
     bank_str = f"+{bank:.2f}" if bank >= 0 else f"{bank:.2f}"
     gt_str   = f"+{grand_total:.2f}" if grand_total >= 0 else f"{grand_total:.2f}"
@@ -487,7 +563,8 @@ def send_leaderboard(match: dict, result: str,
     headers = ["#", "Player", "Points", "Win%", "Missed"] + m_labels
     title   = f"Leaderboard — {tournament_name}"
     sub     = f"After: {match['title']}  ·  Result: {result} Won  ·  Bank: {bank_str} pts"
-    png     = _render_table_png(title, sub, headers, png_rows, png_styles, heroes)
+    png     = _render_table_png(title, sub, headers, png_rows, png_styles,
+                             heroes, penalties)
 
     # ── HTML body ─────────────────────────────────────────────────────────────
     medal_icons = ["🥇", "🥈", "🥉"]
@@ -551,6 +628,7 @@ def send_leaderboard(match: dict, result: str,
       <p style="font-size:12px;color:#aaa;margin-top:8px">
         Last {len(col_match_ids)} completed matches (latest first).<br>
         See attached PNG for shareable version.</p>
+    {_penalties_html(penalties)}
     </body></html>"""
 
     _send(subject   = f"[{tournament_name}] Leaderboard after {match['title']}",
