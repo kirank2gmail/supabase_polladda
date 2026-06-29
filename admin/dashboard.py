@@ -14,7 +14,8 @@ from data.db import (
     get_tournaments, create_tournament, update_tournament_status, delete_tournament,
     get_matches, create_match, bulk_create_matches,
     update_match_result, delete_match,
-    get_votes, delete_vote, get_user_by_id, verify_password
+    get_votes, delete_vote, get_user_by_id, verify_password,
+    get_penalties, add_penalty, delete_penalty,
 )
 from data.points import run_points_calculation, ABANDONED
 from data.db    import mark_match_abandoned
@@ -699,6 +700,65 @@ def _results_tab():
                                   type="primary", disabled=not changed):
                         _apply_result(m, new_w, sel_tid)
 
+    st.markdown("")
+    st.markdown("---")
+
+    # ── Manual Penalties ─────────────────────────────────────────────────────
+    st.markdown("#### 💸 Manual Penalties")
+    st.caption(
+        "Deduct points from a player manually. "
+        "Penalty points flow to the bank. "
+        "Does not affect the leaderboard rank — displayed separately below the table."
+    )
+
+    penalties = get_penalties(sel_tid)
+    all_users = get_all_users()
+    umap      = {u["user_id"]: get_display_name(u["user_id"]) for u in all_users}
+
+    # Add penalty form
+    with st.container(border=True):
+        pc1, pc2, pc3, pc4 = st.columns([3, 2, 4, 2])
+        pen_player = pc1.selectbox(
+            "Player", [umap[u["user_id"]] for u in all_users],
+            key="pen_player_sel"
+        )
+        pen_uid   = next(u["user_id"] for u in all_users
+                         if umap[u["user_id"]] == pen_player)
+        pen_pts   = pc2.number_input(
+            "Points (positive)", min_value=0.5, step=0.5,
+            value=1.0, key="pen_pts_inp"
+        )
+        pen_reason = pc3.text_input("Reason", key="pen_reason_inp")
+        pc4.markdown("<div style='padding-top:24px'></div>", unsafe_allow_html=True)
+        if pc4.button("Add Penalty", type="primary",
+                      key="pen_add_btn", use_container_width=True):
+            if not pen_reason.strip():
+                st.error("Reason is required.")
+            else:
+                add_penalty(sel_tid, pen_uid, pen_pts, pen_reason)
+                st.success(f"Penalty of -{pen_pts:.2f} added for **{pen_player}**.")
+                st.rerun()
+
+    # Existing penalties list
+    if penalties:
+        st.markdown("")
+        for p in penalties:
+            name     = umap.get(p["user_id"], p["user_id"])
+            pts_str  = f"-{float(p['points']):.2f}"
+            date_str = p.get("created_at", "")[:10]
+            pc1, pc2, pc3, pc4, pc5 = st.columns([2, 1, 4, 2, 1])
+            pc1.markdown(f"**{name}**")
+            pc2.markdown(f"<span style='color:#a01414;font-weight:700'>{pts_str}</span>",
+                         unsafe_allow_html=True)
+            pc3.caption(p.get("reason", ""))
+            pc4.caption(date_str)
+            if pc5.button("🗑️", key=f"del_pen_{p['penalty_id']}",
+                          help="Delete this penalty"):
+                delete_penalty(p["penalty_id"])
+                st.rerun()
+    else:
+        st.caption("No penalties recorded for this tournament.")
+
 
 # ── Player Quit / Reinstate ───────────────────────────────────────────────────
 
@@ -939,8 +999,9 @@ def _send_result_emails(match: dict, result: str,
     try:
         from data.db import (
             get_votes, get_all_users, get_display_name,
-            get_tournament
+            get_matches, get_points, get_tournament
         )
+        from utils.streaks import build_leaderboard
 
         tournament    = get_tournament(tournament_id) or {}
         t_name        = tournament.get("name", tournament_id)
@@ -967,8 +1028,28 @@ def _send_result_emails(match: dict, result: str,
         send_poll_results(match, votes, win_amounts, display_names, t_name)
         st.toast("📧 Poll results email sent!", icon="✅")
 
+        # ── Build leaderboard data ────────────────────────────────────────────
+        all_points  = get_points(tournament_id=tournament_id)
+        # Include both completed and abandoned — same set the leaderboard page uses
+        all_matches = [m for m in get_matches(tournament_id=tournament_id)
+                       if m.get("status") in ("completed", "abandoned")]
+
+        # Sort ascending for streak calc, descending for column display
+        sorted_matches_asc = sorted(all_matches,
+                                    key=lambda m: m["match_date"] + m["start_time"])
+        match_ids_desc     = [m["match_id"] for m in reversed(sorted_matches_asc)]
+
+        lb_rows = build_leaderboard(all_points, sorted_matches_asc,
+                                    match_ids_desc, all_users)
+
+        # Last 5 completed matches — latest first for email columns
+        last5        = sorted_matches_asc[-5:]
+        last5_ids    = [m["match_id"] for m in reversed(last5)]
+        last5_titles = {m["match_id"]: m["title"][:10] for m in last5}
+
         # ── Email 2: leaderboard ──────────────────────────────────────────────
-        send_leaderboard(match, result, tournament_id, t_name)
+        send_leaderboard(match, result, lb_rows,
+                         last5_ids, last5_titles, t_name)
         st.toast("📧 Leaderboard email sent!", icon="✅")
 
     except Exception as e:
