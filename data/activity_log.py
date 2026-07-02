@@ -1,6 +1,6 @@
 """
 data/activity_log.py
-User activity logging to GCS activity_log.json
+User activity logging to the Supabase activity_log table.
 
 Logged events:
   login         — user signed in
@@ -9,13 +9,13 @@ Logged events:
   vote_changed  — user changed their vote
 
 Each record:
-  event_id, user_id, user_name, event, timestamp, details (dict)
+  event_id, user_id, user_name, event, timestamp, details (dict, JSONB)
 """
 
 import uuid
 import streamlit as st
 from datetime import datetime, timezone
-from data.gcs import read_table, write_table
+from data.supabase_client import get_client
 
 
 def _now() -> str:
@@ -37,8 +37,8 @@ def _get_name(user_id: str) -> str:
 def _log(user_id: str, event: str, details: dict = None):
     """
     Queue activity record in session state.
-    Writes to GCS only when queue reaches 5 events or on flush.
-    This avoids a GCS write on every vote action.
+    Writes to Supabase only when queue reaches 5 events or on flush.
+    This avoids a write on every vote action.
     """
     try:
         record = {
@@ -53,7 +53,7 @@ def _log(user_id: str, event: str, details: dict = None):
         queue.append(record)
         st.session_state["_activity_queue"] = queue
 
-        # Flush to GCS when queue has 5+ records, or for login events
+        # Flush to Supabase when queue has 5+ records, or for login events
         if len(queue) >= 5 or event == "login":
             _flush()
     except Exception:
@@ -61,14 +61,12 @@ def _log(user_id: str, event: str, details: dict = None):
 
 
 def _flush():
-    """Write queued activity records to GCS in one batch write."""
+    """Write queued activity records to Supabase in one batch insert."""
     try:
         queue = st.session_state.get("_activity_queue", [])
         if not queue:
             return
-        records = read_table("activity_log")
-        records.extend(queue)
-        write_table("activity_log", records)
+        get_client().table("activity_log").insert(queue).execute()
         st.session_state["_activity_queue"] = []
     except Exception:
         pass

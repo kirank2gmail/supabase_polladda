@@ -1,5 +1,5 @@
 """
-data/points.py — Points calculation engine.
+data/points.py — Points calculation engine (Supabase Postgres backend).
 
 Exact rules:
 
@@ -21,7 +21,7 @@ Exact rules:
     FIXED mode → fixed_odds (flat). Everything else goes to bank.
 """
 
-from data.gcs import read_table, write_table
+from data.supabase_client import read_table, get_client, sess_clear, ttl_votes_clear
 
 ABANDONED = "abandoned"   # sentinel returned when match has no voters
 
@@ -36,14 +36,13 @@ def _get_match(mid):
 
 def _get_match_players_for_match(match_id: str, tournament_id: str) -> list[dict]:
     """
-    Read match_players for this specific match directly from GCS.
+    Read match_players for this specific match directly from Supabase.
     Returns all records: voted, missed, quit, not_started.
     No cache — always fresh.
     """
-    from data.gcs import _fetch
-    return [r for r in _fetch("match_players")
-            if r["match_id"] == match_id
-            and r["tournament_id"] == tournament_id]
+    return get_client().table("match_players").select("*") \
+        .eq("match_id", match_id).eq("tournament_id", tournament_id) \
+        .execute().data or []
 
 def _get_votes(match_id=None, tournament_id=None):
     vs = read_table("votes")
@@ -61,7 +60,8 @@ def _uid():
     import uuid; return str(uuid.uuid4())[:8]
 
 def _now():
-    from datetime import datetime; return datetime.utcnow().isoformat()
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _count_prior_misses(user_id: str, match_id: str,
@@ -69,19 +69,18 @@ def _count_prior_misses(user_id: str, match_id: str,
                          all_mp: list = None) -> int:
     """
     Count how many 'missed' records this player has BEFORE match_id
-    in match_players.json.
+    in match_players.
 
-    match_players.json is the single source of truth — it already contains
+    match_players is the single source of truth — it already contains
     explicit 'missed' records written when results are saved or when
-    recalculate tournament runs. No date comparison or votes.json needed.
+    recalculate tournament runs. No date comparison or votes table needed.
 
     all_mp: pre-fetched match_players for the tournament (avoids repeated
-            GCS reads when called in a loop).
+            reads when called in a loop).
     """
-    from data.gcs import _fetch
-
     if all_mp is None:
-        all_mp = _fetch("match_players")
+        all_mp = get_client().table("match_players").select("*") \
+            .eq("tournament_id", tournament_id).execute().data or []
 
     # Get this match's date+time for "before" comparison
     all_matches = _get_matches(tournament_id=tournament_id)
@@ -121,8 +120,7 @@ def _count_prior_misses(user_id: str, match_id: str,
             if mid in match_dt_map
         )
         if floor_dt and floor_dt <= this_dt:
-            t_obj = next((t for t in read_table("tournaments")
-                          if t["tournament_id"] == tournament_id), None)
+            t_obj = _get_tournament(tournament_id)
             allowed = int((t_obj or {}).get("allowed_misses", 3))
             real_count = max(real_count, allowed)
 
@@ -139,12 +137,10 @@ def calculate_match_points(match_id: str, tournament_id: str,
     allowed_misses = int(tournament.get("allowed_misses", 3))
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
-    # Read match_players fresh from GCS — single source of truth, no cache
-    from data.gcs import _fetch as _gcs_fetch
-    all_mp   = _gcs_fetch("match_players")
-    mp_match = [r for r in all_mp
-                if r["match_id"] == match_id
-                and r["tournament_id"] == tournament_id]
+    # Read match_players fresh, tournament-scoped — single source of truth, no cache
+    all_mp   = get_client().table("match_players").select("*") \
+        .eq("tournament_id", tournament_id).execute().data or []
+    mp_match = [r for r in all_mp if r["match_id"] == match_id]
 
     # Split by status — match_players has all records pre-computed
     voted_records  = [r for r in mp_match if r["status"] == "voted"]
@@ -229,27 +225,28 @@ def calculate_match_points(match_id: str, tournament_id: str,
 
 
 def delete_match_points(match_id: str):
-    existing = read_table("points")
-    write_table("points", [p for p in existing if p["match_id"] != match_id])
+    get_client().table("points").delete().eq("match_id", match_id).execute()
+    sess_clear("points")
 
 
 def save_points_batch(records: list[dict]):
-    existing = read_table("points")
     now = _now()
-    for r in records:
-        existing.append({
-            "point_id"      : _uid(),
-            "user_id"       : r["user_id"],
-            "match_id"      : r["match_id"],
-            "tournament_id" : r["tournament_id"],
-            "base_points"   : r.get("base_points",    0),
-            "penalty_points": r.get("penalty_points", 0),
-            "bonus_points"  : r.get("bonus_points",   0),
-            "total_points"  : r.get("total_points",   0),
-            "note"          : r.get("note",           ""),
-            "calculated_at" : now,
-        })
-    write_table("points", existing)
+    payload = [{
+        "point_id"      : _uid(),
+        "user_id"       : r["user_id"],
+        "match_id"      : r["match_id"],
+        "tournament_id" : r["tournament_id"],
+        "base_points"   : r.get("base_points",    0),
+        "penalty_points": r.get("penalty_points", 0),
+        "bonus_points"  : r.get("bonus_points",   0),
+        "total_points"  : r.get("total_points",   0),
+        "note"          : r.get("note",           ""),
+        "calculated_at" : now,
+    } for r in records]
+    sb = get_client()
+    for i in range(0, len(payload), 500):
+        sb.table("points").insert(payload[i:i + 500]).execute()
+    sess_clear("points")
 
 
 def _deduplicate_votes(match_id: str):
@@ -264,39 +261,31 @@ def _deduplicate_votes(match_id: str):
         if v.get("match_id") == match_id:
             by_user[v["user_id"]].append(v)
 
-    changed  = False
-    keep_ids = set()
     drop_ids = set()
 
     for uid, uvotes in by_user.items():
         if len(uvotes) <= 1:
-            if uvotes:
-                keep_ids.add(uvotes[0]["vote_id"])
             continue
         # Sort newest first
         uvotes.sort(
             key=lambda v: v.get("updated_at") or v.get("voted_at") or "",
             reverse=True
         )
-        keep_ids.add(uvotes[0]["vote_id"])
         for v in uvotes[1:]:
             drop_ids.add(v["vote_id"])
-        changed = True
 
-    if changed and drop_ids:
-        cleaned = [v for v in votes if v.get("vote_id") not in drop_ids]
-        write_table("votes", cleaned)
+    if drop_ids:
+        get_client().table("votes").delete().in_("vote_id", list(drop_ids)).execute()
+        ttl_votes_clear()
 
 
 def _mark_abandoned(match_id: str):
     """Delete points and mark match as abandoned."""
     delete_match_points(match_id)
-    matches = read_table("matches")
-    for m in matches:
-        if m["match_id"] == match_id:
-            m["result"] = "abandoned"
-            m["status"] = "abandoned"
-    write_table("matches", matches)
+    get_client().table("matches").update({
+        "result": "abandoned", "status": "abandoned",
+    }).eq("match_id", match_id).execute()
+    sess_clear("matches"); sess_clear("points")
 
 
 def run_points_calculation(match_id: str, tournament_id: str,
@@ -312,17 +301,16 @@ def run_points_calculation(match_id: str, tournament_id: str,
       - All active voters picked the same option (no contest)
 
     Quit players are excluded from abandon checks — their historical votes
-    in votes.json are irrelevant once they have quit status in match_players.
+    in the votes table are irrelevant once they have quit status in
+    match_players.
     """
     _deduplicate_votes(match_id)
 
     # Use match_players as the source of truth for who is active.
-    # Quit players may still have votes in votes.json — ignore them here.
-    from data.gcs import _fetch as _gcs_fetch
-    all_mp   = _gcs_fetch("match_players")
-    mp_match = [r for r in all_mp
-                if r["match_id"] == match_id
-                and r["tournament_id"] == tournament_id]
+    # Quit players may still have votes on record — ignore them here.
+    mp_match = get_client().table("match_players").select("*") \
+        .eq("match_id", match_id).eq("tournament_id", tournament_id) \
+        .execute().data or []
 
     active_voted = [r for r in mp_match if r["status"] == "voted"]
 

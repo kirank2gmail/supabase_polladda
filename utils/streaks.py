@@ -14,7 +14,7 @@ build_leaderboard() now takes match_ids_desc explicitly
 so the caller controls column order (latest first).
 """
 
-from data.gcs import read_table
+from data.supabase_client import read_table
 
 
 def get_display_name(user_id: str) -> str:

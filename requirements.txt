@@ -8,3 +8,4 @@ Pillow
 matplotlib
 cryptography
 bcrypt
+supabase>=2.4,<3.0

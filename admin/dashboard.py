@@ -15,7 +15,7 @@ from data.db import (
     get_matches, create_match, bulk_create_matches,
     update_match_result, delete_match,
     get_votes, delete_vote, get_user_by_id, verify_password,
-    get_penalties, add_penalty, delete_penalty,
+    get_penalties, add_penalty, delete_penalty, delete_match_points,
 )
 from data.points import run_points_calculation, ABANDONED
 from data.db    import mark_match_abandoned
@@ -108,11 +108,11 @@ def _users_tab(admin: dict):
                 st.error("Password must be at least 6 characters.")
             elif pw != pw2:
                 st.error("Passwords do not match.")
-            elif any(u["name"].lower() == uname.lower() for u in get_all_users()):
+            elif any(u["username"].lower() == uname.lower() for u in get_all_users()):
                 st.error("Username already exists.")
             else:
                 new_u = create_user(uname.strip(), pw, role,
-                                    created_by=admin["name"])
+                                    created_by=admin["username"])
                 st.success(
                     f"User **{uname}** created. "
                     f"Nickname: **{new_u['nickname']}**. "
@@ -133,7 +133,7 @@ def _users_tab(admin: dict):
         with st.container(border=True):
             c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
             with c1:
-                st.markdown(f"**{u['name']}**  —  nickname: `{nick}`")
+                st.markdown(f"**{u['username']}**  —  nickname: `{nick}`")
                 st.caption(
                     f"ID: `{u['user_id']}`  ·  "
                     f"Created: {format_ts(u.get('created_at',''), 'Asia/Kolkata')[:12]}  ·  "
@@ -160,10 +160,8 @@ def _users_tab(admin: dict):
                             st.error("Min 6 chars.")
                         else:
                             change_password(u["user_id"], npw)
-                            from data.db import _update_where
-                            _update_where("users",
-                                lambda r, uid=u["user_id"]: r["user_id"] == uid,
-                                lambda r: r.update({"must_change_password": True}))
+                            from data.db import force_password_change
+                            force_password_change(u["user_id"])
                             st.success("Password reset.")
             with c4:
                 if not is_self:
@@ -171,7 +169,7 @@ def _users_tab(admin: dict):
                                   help="Delete user"):
                         st.session_state[f"del_u_{u['user_id']}"] = True
             if st.session_state.get(f"del_u_{u['user_id']}"):
-                st.warning(f"Delete user **{u['name']}**?")
+                st.warning(f"Delete user **{u['username']}**?")
                 cc1, cc2 = st.columns(2)
                 if cc1.button("Yes", key=f"deluyes_{u['user_id']}", type="primary"):
                     delete_user(u["user_id"])
@@ -212,7 +210,7 @@ def _tournaments_tab(user: dict):
                     create_tournament({
                         "tournament_id": t_id, "name": name, "sport": sport,
                         "start_date": str(s_date), "allowed_misses": allowed,
-                        "penalty_points": penalty, "created_by": user["name"]})
+                        "penalty_points": penalty, "created_by": user["username"]})
                     st.success(f"Tournament **{name}** created!")
                     st.rerun()
 
@@ -397,7 +395,7 @@ def _bulk_upload(tid: str, user: dict):
                     st.warning(f"Skipped `{r['match_id']}` — ID already exists.")
                     continue
                 rows.append(r)
-            bulk_create_matches(tid, rows, user["name"])
+            bulk_create_matches(tid, rows, user["username"])
             st.success(f"{len(rows)} matches imported!")
             st.rerun()
     except Exception as e:
@@ -484,7 +482,7 @@ def _single_form(tid: str, user: dict):
                         "start_time": s_time.strftime("%H:%M"),
                         "timezone": tz, "options": options,
                         "scoring_mode": scoring_mode, "fixed_odds": fixed_odds,
-                        "poll_mode": poll_mode, "created_by": user["name"],
+                        "poll_mode": poll_mode, "created_by": user["username"],
                     })
                     st.success(f"Match `{match_id}` added!")
                     st.rerun()
@@ -503,8 +501,7 @@ def _recalculate_tournament(sel_tid: str):
     rebuild_for_tournament(sel_tid)
 
     # Step 2: recalculate points using match_players
-    from data.gcs import _fetch
-    all_ms = _fetch("matches")
+    all_ms = get_matches(sel_tid)
     done   = sorted(
         [m for m in all_ms
          if m.get("tournament_id") == sel_tid
@@ -515,8 +512,7 @@ def _recalculate_tournament(sel_tid: str):
     recalc = abandoned = errors = 0
     for m in done:
         if m.get("status") == "abandoned" and m.get("result") == "abandoned":
-            from data.db import delete_match_points as _dmp
-            _dmp(m["match_id"])
+            delete_match_points(m["match_id"])
             abandoned += 1
             continue
         try:

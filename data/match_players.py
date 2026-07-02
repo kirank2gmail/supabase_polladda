@@ -1,7 +1,7 @@
 """
-data/match_players.py
+data/match_players.py (Supabase Postgres backend)
 ━━━━━━━━━━━━━━━━━━━━
-Single source of truth for building / rebuilding match_players.json.
+Single source of truth for building / rebuilding the match_players table.
 
 Public API
 ──────────
@@ -9,6 +9,11 @@ migrate_from_votes(tournament_id, gcs_fetch_fn, gcs_push_fn)
     Full deterministic rebuild of match_players for one or all tournaments.
     This is THE core logic: voted + missed records, quit records preserved,
     abandoned matches skipped, not_started players omitted.
+
+    gcs_fetch_fn/gcs_push_fn are kept only for backward-compatible signature
+    injection (e.g. tests) — when omitted (the normal path) the function
+    reads/writes Supabase directly, scoped to the tournament(s) being
+    rebuilt, rather than replacing the entire table.
 
     Called by:
       • Dashboard "Run Migration" button  — to inspect match_players without
@@ -27,20 +32,22 @@ rebuild_for_tournament(tournament_id)
 
 Design notes
 ────────────
-• All reads bypass the session / TTL caches — raw _fetch/_push so that
-  points calculation always sees a fully consistent, freshly-written table.
+• matches/registrations/tournaments reads go through the session cache
+  (data.supabase_client.read_table) — fine here since same-session writes
+  already invalidate that cache before any rebuild button is clicked.
+• votes and match_players reads/writes always go straight to Supabase,
+  scoped by tournament_id/match_id — these must stay maximally fresh.
 • quit records are always preserved; they are managed separately by admin.
 • not_started players (first vote is after this match) produce no row.
 • abandoned matches produce no rows.
-• migrate_from_votes accepts optional gcs_fetch_fn / gcs_push_fn so the
-  CLI and Streamlit callers can pass in the same _fetch/_push primitives
-  without importing from data.gcs at module level.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+
+from data.supabase_client import read_table, get_client, sess_clear
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -184,6 +191,33 @@ def _build_records_for_match(
     return records
 
 
+def _build_quit_boundaries(tid: str, t_match_map: dict, existing_mp: list[dict]) -> dict[str, str]:
+    """
+    Build {user_id: earliest quit boundary match_id} for one tournament from
+    existing quit records. quit_at holds the from_match_id passed to
+    quit_player().
+    """
+    quit_boundaries: dict[str, str] = {}
+    for r in existing_mp:
+        if r.get("tournament_id") != tid:
+            continue
+        if r.get("status") != "quit":
+            continue
+        uid          = r["user_id"]
+        boundary_mid = r.get("quit_at") or r["match_id"]
+        bm = t_match_map.get(boundary_mid)
+        if not bm:
+            # Fall back to the record's own match_id as the boundary
+            boundary_mid = r["match_id"]
+            bm = t_match_map.get(boundary_mid)
+        if not bm:
+            continue
+        boundary_dt = _match_dt(bm)
+        if uid not in quit_boundaries or boundary_dt < _match_dt(t_match_map[quit_boundaries[uid]]):
+            quit_boundaries[uid] = boundary_mid
+    return quit_boundaries
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def migrate_from_votes(
@@ -192,11 +226,11 @@ def migrate_from_votes(
     gcs_push_fn=None,
 ) -> int:
     """
-    Full deterministic rebuild of match_players.json.
+    Full deterministic rebuild of match_players.
 
-    Reads votes.json, registrations.json, and matches.json to produce
-    complete voted + missed records for every completed match.
-    Quit records are preserved. Abandoned matches produce no rows.
+    Reads votes, registrations, and matches to produce complete voted +
+    missed records for every completed match. Quit records are preserved.
+    Abandoned matches produce no rows.
 
     Parameters
     ──────────
@@ -204,89 +238,85 @@ def migrate_from_votes(
         Scope the rebuild to one tournament.  Pass None to rebuild ALL
         tournaments (useful for the initial one-time migration).
     gcs_fetch_fn / gcs_push_fn
-        Injectable GCS primitives.  When None, defaults to data.gcs._fetch
-        and data.gcs._push so Streamlit callers don't need to import them.
+        Legacy injectable primitives, kept only for backward-compatible
+        signature/tests. When provided, the function operates on the old
+        "read everything, replace the entire table" contract. When omitted
+        (the normal path), reads/writes are scoped to the tournament(s)
+        being rebuilt via targeted Supabase queries.
 
     Returns
     ───────
-    Number of new (voted + missed) records written for the tournament(s).
+    Number of new (voted + missed + quit) records written for the tournament(s).
     """
-    if gcs_fetch_fn is None or gcs_push_fn is None:
-        from data.gcs import _fetch, _push
-        gcs_fetch_fn = gcs_fetch_fn or _fetch
-        gcs_push_fn  = gcs_push_fn  or _push
+    if gcs_fetch_fn or gcs_push_fn:
+        # Legacy whole-table-replace path (tests / injected primitives only).
+        fetch = gcs_fetch_fn or read_table
+        all_votes     = fetch("votes")
+        all_matches   = fetch("matches")
+        registrations = fetch("registrations")
+        existing_mp   = fetch("match_players")
 
-    all_votes     = gcs_fetch_fn("votes")
-    all_matches   = gcs_fetch_fn("matches")
-    registrations = gcs_fetch_fn("registrations")
-    existing_mp   = gcs_fetch_fn("match_players")
+        tids = [tournament_id] if tournament_id else list(
+            {m["tournament_id"] for m in all_matches if m.get("tournament_id")})
 
-    # Determine which tournament IDs to rebuild
-    if tournament_id:
-        tids = [tournament_id]
-    else:
-        tids = list({m["tournament_id"] for m in all_matches
-                     if m.get("tournament_id")})
+        other_mp = [r for r in existing_mp if r.get("tournament_id") not in tids]
+        new_mp: list[dict] = []
+        for tid in tids:
+            t_match_map = {m["match_id"]: m for m in all_matches
+                           if m.get("tournament_id") == tid}
+            quit_boundaries = _build_quit_boundaries(tid, t_match_map, existing_mp)
+            t_matches = sorted(
+                [m for m in all_matches
+                 if m.get("tournament_id") == tid
+                 and m.get("status") in ("completed", "abandoned")
+                 and m.get("result") not in ("", None)],
+                key=_match_dt,
+            )
+            for m in t_matches:
+                new_mp.extend(_build_records_for_match(
+                    m["match_id"], tid, m, all_matches, all_votes,
+                    registrations, quit_boundaries, existing_mp,
+                ))
 
-    # Keep records that belong to tournaments we are NOT rebuilding
-    other_mp = [r for r in existing_mp
-                if r.get("tournament_id") not in tids]
+        if gcs_push_fn:
+            gcs_push_fn("match_players", other_mp + new_mp)
+        return len(new_mp)
+
+    # ── Normal path: targeted, tournament-scoped Supabase queries ────────────
+    sb = get_client()
+    all_matches   = read_table("matches")
+    registrations = read_table("registrations")
+
+    tids = [tournament_id] if tournament_id else list(
+        {m["tournament_id"] for m in all_matches if m.get("tournament_id")})
+    if not tids:
+        return 0
+
+    all_votes   = sb.table("votes").select("*").in_("tournament_id", tids).execute().data or []
+    existing_mp = sb.table("match_players").select("*").in_("tournament_id", tids).execute().data or []
 
     new_mp: list[dict] = []
     for tid in tids:
-        # Build quit_boundaries for this tournament:
-        # {user_id: earliest quit boundary _match_dt string}
-        # quit_at holds the from_match_id passed to quit_player.
-        # We convert it to a _match_dt string so _build_records_for_match
-        # can compare directly against this_dt.
-        t_match_map = {
-            m["match_id"]: m
-            for m in all_matches
-            if m.get("tournament_id") == tid
-        }
-        quit_boundaries: dict[str, str] = {}
-        for r in existing_mp:
-            if r.get("tournament_id") != tid:
-                continue
-            if r.get("status") != "quit":
-                continue
-            uid          = r["user_id"]
-            boundary_mid = r.get("quit_at") or r["match_id"]
-            # Guard: quit_at must be a match_id (lookup-able in t_match_map).
-            # Old records may have stored a datetime string — skip those;
-            # they will be corrected on the next rebuild.
-            bm = t_match_map.get(boundary_mid)
-            if not bm:
-                # Fall back to the record's own match_id as the boundary
-                boundary_mid = r["match_id"]
-                bm = t_match_map.get(boundary_mid)
-            if not bm:
-                continue
-            boundary_dt = _match_dt(bm)
-            # Keep the earliest boundary per player
-            if uid not in quit_boundaries or boundary_dt < _match_dt(t_match_map[quit_boundaries[uid]]):
-                quit_boundaries[uid] = boundary_mid
-
-        # Completed (non-abandoned) matches for this tournament, oldest first
+        t_match_map = {m["match_id"]: m for m in all_matches
+                       if m.get("tournament_id") == tid}
+        quit_boundaries = _build_quit_boundaries(tid, t_match_map, existing_mp)
         t_matches = sorted(
-            [
-                m for m in all_matches
-                if m.get("tournament_id") == tid
-                and m.get("status") in ("completed", "abandoned")
-                and m.get("result") not in ("", None)
-            ],
+            [m for m in all_matches
+             if m.get("tournament_id") == tid
+             and m.get("status") in ("completed", "abandoned")
+             and m.get("result") not in ("", None)],
             key=_match_dt,
         )
         for m in t_matches:
-            new_mp.extend(
-                _build_records_for_match(
-                    m["match_id"], tid,
-                    m, all_matches, all_votes, registrations, quit_boundaries,
-                    existing_mp,
-                )
-            )
+            new_mp.extend(_build_records_for_match(
+                m["match_id"], tid, m, all_matches, all_votes,
+                registrations, quit_boundaries, existing_mp,
+            ))
 
-    gcs_push_fn("match_players", other_mp + new_mp)
+    sb.table("match_players").delete().in_("tournament_id", tids).execute()
+    for i in range(0, len(new_mp), 500):
+        sb.table("match_players").insert(new_mp[i:i + 500]).execute()
+
     return len(new_mp)
 
 
@@ -310,12 +340,12 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
 
     Returns the number of new records written.
     """
-    from data.gcs import _fetch, _push
+    sb = get_client()
 
-    all_votes     = _fetch("votes")
-    all_matches   = _fetch("matches")
-    registrations = _fetch("registrations")
-    existing_mp   = _fetch("match_players")
+    all_matches   = read_table("matches")
+    registrations = read_table("registrations")
+    existing_mp   = sb.table("match_players").select("*") \
+        .eq("tournament_id", tournament_id).execute().data or []
 
     this_match = next(
         (m for m in all_matches if m["match_id"] == match_id), None
@@ -323,29 +353,12 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
     if not this_match:
         return 0
 
-    # Build quit_boundaries for this tournament from existing quit records
-    t_match_map = {
-        m["match_id"]: m
-        for m in all_matches
-        if m.get("tournament_id") == tournament_id
-    }
-    quit_boundaries: dict[str, str] = {}
-    for r in existing_mp:
-        if r.get("tournament_id") != tournament_id:
-            continue
-        if r.get("status") != "quit":
-            continue
-        uid          = r["user_id"]
-        boundary_mid = r.get("quit_at") or r["match_id"]
-        bm = t_match_map.get(boundary_mid)
-        if not bm:
-            boundary_mid = r["match_id"]
-            bm = t_match_map.get(boundary_mid)
-        if not bm:
-            continue
-        boundary_dt = _match_dt(bm)
-        if uid not in quit_boundaries or boundary_dt < _match_dt(t_match_map[quit_boundaries[uid]]):
-            quit_boundaries[uid] = boundary_mid
+    t_match_map = {m["match_id"]: m for m in all_matches
+                   if m.get("tournament_id") == tournament_id}
+    quit_boundaries = _build_quit_boundaries(tournament_id, t_match_map, existing_mp)
+
+    all_votes = sb.table("votes").select("*") \
+        .eq("match_id", match_id).eq("tournament_id", tournament_id).execute().data or []
 
     new_records = _build_records_for_match(
         match_id, tournament_id,
@@ -353,9 +366,9 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
         existing_mp,
     )
 
-    # Replace only this match's records (quit records now included in new_records)
-    other_records = [r for r in existing_mp if r["match_id"] != match_id]
-    _push("match_players", other_records + new_records)
+    sb.table("match_players").delete().eq("match_id", match_id).execute()
+    if new_records:
+        sb.table("match_players").insert(new_records).execute()
     return len(new_records)
 
 
@@ -388,12 +401,8 @@ def quit_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
 
     Returns the number of records updated.
     """
-    from data.gcs import _fetch, _push
+    all_matches = read_table("matches")
 
-    all_mp      = _fetch("match_players")
-    all_matches = _fetch("matches")
-
-    # Sort this tournament's matches chronologically → get IDs from from_match_id onwards
     t_matches = sorted(
         [m for m in all_matches if m.get("tournament_id") == tournament_id],
         key=_match_dt,
@@ -403,22 +412,15 @@ def quit_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
     if from_match_id not in match_ids:
         return 0
 
-    from_idx     = match_ids.index(from_match_id)
-    quit_match_ids = set(match_ids[from_idx:])
+    from_idx       = match_ids.index(from_match_id)
+    quit_match_ids = match_ids[from_idx:]
 
-    updated = 0
-    for r in all_mp:
-        if r.get("user_id") != user_id:
-            continue
-        if r.get("tournament_id") != tournament_id:
-            continue
-        if r["match_id"] in quit_match_ids:
-            r["status"]  = "quit"
-            r["quit_at"] = from_match_id
-            updated += 1
+    resp = get_client().table("match_players").update({
+        "status": "quit", "quit_at": from_match_id,
+    }).eq("user_id", user_id).eq("tournament_id", tournament_id) \
+        .in_("match_id", quit_match_ids).execute()
 
-    _push("match_players", all_mp)
-    return updated
+    return len(resp.data) if resp.data is not None else 0
 
 
 def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
@@ -427,17 +429,14 @@ def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> in
 
     Removes quit records whose match_id falls on or after from_match_id
     in chronological order, then calls migrate_from_votes to rebuild
-    those matches as voted / missed from votes.json and registrations.json.
+    those matches as voted / missed from votes and registrations.
 
     Quit records for matches before from_match_id are preserved
     (supports partial quit history: quit, rejoin, quit again).
 
     Returns the number of quit records removed before the rebuild.
     """
-    from data.gcs import _fetch, _push
-
-    all_mp      = _fetch("match_players")
-    all_matches = _fetch("matches")
+    all_matches = read_table("matches")
 
     t_matches = sorted(
         [m for m in all_matches if m.get("tournament_id") == tournament_id],
@@ -448,20 +447,13 @@ def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> in
     if from_match_id not in match_ids:
         return 0
 
-    from_idx          = match_ids.index(from_match_id)
-    reinstate_match_ids = set(match_ids[from_idx:])
+    from_idx            = match_ids.index(from_match_id)
+    reinstate_match_ids = match_ids[from_idx:]
 
-    def _keep(r: dict) -> bool:
-        if r.get("user_id") != user_id:
-            return True
-        if r.get("tournament_id") != tournament_id:
-            return True
-        if r.get("status") != "quit":
-            return True
-        return r["match_id"] not in reinstate_match_ids
-
-    removed = sum(1 for r in all_mp if not _keep(r))
-    _push("match_players", [r for r in all_mp if _keep(r)])
+    resp = get_client().table("match_players").delete() \
+        .eq("user_id", user_id).eq("tournament_id", tournament_id) \
+        .eq("status", "quit").in_("match_id", reinstate_match_ids).execute()
+    removed = len(resp.data) if resp.data is not None else 0
 
     migrate_from_votes(tournament_id=tournament_id)
     return removed
@@ -486,11 +478,9 @@ def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
     so finding the earliest quit boundary is a simple string comparison
     using the chronological sort key (_match_dt).
     """
-    from data.gcs import _fetch
-
-    all_mp      = _fetch("match_players")
-    all_matches = _fetch("matches")
-    t_mp        = [r for r in all_mp if r.get("tournament_id") == tournament_id]
+    t_mp = get_client().table("match_players").select("*") \
+        .eq("tournament_id", tournament_id).execute().data or []
+    all_matches = read_table("matches")
 
     # match_id → match dict (for label generation and sort key)
     match_map = {
@@ -550,27 +540,25 @@ def apply_miss_floor(tournament_id: str, from_match_id: str) -> int:
 
     Returns the number of synthetic records written.
     """
-    from data.gcs import _fetch, _push
+    sb = get_client()
 
-    tournaments   = _fetch("tournaments")
-    tournament    = next((t for t in tournaments
-                          if t["tournament_id"] == tournament_id), None)
+    tournament     = next((t for t in read_table("tournaments")
+                           if t["tournament_id"] == tournament_id), None)
     allowed_misses = int((tournament or {}).get("allowed_misses", 3))
 
-    existing_mp   = _fetch("match_players")
+    existing_mp = sb.table("match_players").select("*") \
+        .eq("tournament_id", tournament_id).execute().data or []
 
     # Active players = those with any non-quit record in this tournament
     active_uids = {
         r["user_id"] for r in existing_mp
-        if r.get("tournament_id") == tournament_id
-        and r.get("status") != "quit"
+        if r.get("status") != "quit"
         and r.get("note") != "miss_floor"
     }
 
     # Remove any existing floor records for this tournament (idempotent)
-    cleaned = [r for r in existing_mp
-               if not (r.get("tournament_id") == tournament_id
-                       and r.get("note") == "miss_floor")]
+    sb.table("match_players").delete() \
+        .eq("tournament_id", tournament_id).eq("note", "miss_floor").execute()
 
     new_records: list[dict] = []
     for uid in active_uids:
@@ -587,7 +575,8 @@ def apply_miss_floor(tournament_id: str, from_match_id: str) -> int:
                 "created_at"   : _now(),
             })
 
-    _push("match_players", cleaned + new_records)
+    for i in range(0, len(new_records), 500):
+        sb.table("match_players").insert(new_records[i:i + 500]).execute()
     return len(new_records)
 
 
@@ -596,15 +585,9 @@ def remove_miss_floor(tournament_id: str) -> int:
     Remove all miss_floor records for a tournament (undo apply_miss_floor).
     Returns the number of records removed.
     """
-    from data.gcs import _fetch, _push
-
-    existing_mp = _fetch("match_players")
-    keep   = [r for r in existing_mp
-              if not (r.get("tournament_id") == tournament_id
-                      and r.get("note") == "miss_floor")]
-    removed = len(existing_mp) - len(keep)
-    _push("match_players", keep)
-    return removed
+    resp = get_client().table("match_players").delete() \
+        .eq("tournament_id", tournament_id).eq("note", "miss_floor").execute()
+    return len(resp.data) if resp.data is not None else 0
 
 
 def get_miss_floor_status(tournament_id: str) -> dict | None:
@@ -619,11 +602,9 @@ def get_miss_floor_status(tournament_id: str) -> dict | None:
         "record_count":  int,
       }
     """
-    from data.gcs import _fetch
-
-    floor_records = [r for r in _fetch("match_players")
-                     if r.get("tournament_id") == tournament_id
-                     and r.get("note") == "miss_floor"]
+    floor_records = get_client().table("match_players").select("*") \
+        .eq("tournament_id", tournament_id).eq("note", "miss_floor") \
+        .execute().data or []
     if not floor_records:
         return None
 

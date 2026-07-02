@@ -1,6 +1,6 @@
 """
 utils/session_manager.py
-Server-side session tokens stored in GCS.
+Server-side session tokens stored in Supabase.
 
 Session token is placed in the URL as ?s=TOKEN.
 URL params persist as long as the browser tab is open or the URL is bookmarked.
@@ -12,13 +12,14 @@ For guaranteed persistence across tab close: user ticks "Keep me signed in"
 on the login form, which sets the token in the URL. Browsers that restore
 sessions pick this up automatically.
 
-Sessions expire after 7 days. GCS cleanup happens automatically on read.
+Sessions expire after SESSION_DAYS. Expired sessions are cleaned up
+opportunistically on read.
 """
 
 import uuid
 import streamlit as st
 from datetime import datetime, timedelta, timezone
-from data.gcs import read_table, write_table
+from data.supabase_client import read_table, get_client, ttl_sessions_clear
 
 SESSION_DAYS  = 365    # 1 year
 SESSION_PARAM = "s"
@@ -29,11 +30,10 @@ def _now() -> str:
 
 
 def _read_valid() -> list[dict]:
-    """Read sessions table, dropping expired entries."""
+    """Read sessions table (60s TTL cache), dropping expired entries."""
     sessions = read_table("sessions")
     now      = datetime.now(timezone.utc)
-    valid    = []
-    changed  = False
+    valid, expired_tokens = [], []
     for s in sessions:
         try:
             exp = datetime.fromisoformat(s["expires"])
@@ -42,40 +42,57 @@ def _read_valid() -> list[dict]:
             if exp > now:
                 valid.append(s)
             else:
-                changed = True
+                expired_tokens.append(s["token"])
         except Exception:
-            changed = True
-    if changed:
-        write_table("sessions", valid)
+            if s.get("token"):
+                expired_tokens.append(s["token"])
+    if expired_tokens:
+        get_client().table("sessions").delete().in_("token", expired_tokens).execute()
+        ttl_sessions_clear()
     return valid
 
 
 def create_session(user_id: str) -> str:
     """Create a server-side session, return the token."""
-    token    = str(uuid.uuid4()).replace("-", "")
-    expires  = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()
-    sessions = _read_valid()
-    # One session per user — remove any existing ones
-    sessions = [s for s in sessions if s.get("user_id") != user_id]
-    sessions.append({
+    sb      = get_client()
+    token   = str(uuid.uuid4()).replace("-", "")
+    expires = (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()
+    # One session per user — remove any existing one(s) first
+    sb.table("sessions").delete().eq("user_id", user_id).execute()
+    sb.table("sessions").insert({
         "token"      : token,
         "user_id"    : user_id,
         "created_at" : _now(),
         "expires"    : expires,
-    })
-    write_table("sessions", sessions)
+    }).execute()
+    ttl_sessions_clear()
     return token
 
 
 def validate_session(token: str) -> str | None:
-    """Validate token, return user_id if valid else None."""
+    """
+    Validate token, return user_id if valid else None.
+    Targeted single-row lookup — this runs on every page rerun, so an
+    indexed .eq() lookup is simpler and cheaper than scanning a cached
+    full table.
+    """
     if not token:
         return None
-    sessions = _read_valid()
-    for s in sessions:
-        if s.get("token") == token:
-            return s["user_id"]
-    return None
+    resp = get_client().table("sessions").select("user_id,expires") \
+        .eq("token", token).limit(1).execute()
+    rows = resp.data or []
+    if not rows:
+        return None
+    row = rows[0]
+    try:
+        exp = datetime.fromisoformat(row["expires"])
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp <= datetime.now(timezone.utc):
+            return None
+    except Exception:
+        return None
+    return row["user_id"]
 
 
 def delete_session(token: str):
@@ -83,9 +100,8 @@ def delete_session(token: str):
     if not token:
         return
     try:
-        sessions = [s for s in read_table("sessions")
-                    if s.get("token") != token]
-        write_table("sessions", sessions)
+        get_client().table("sessions").delete().eq("token", token).execute()
+        ttl_sessions_clear()
     except Exception:
         pass
 

@@ -1,23 +1,35 @@
 """
-data/db.py — Data access layer.
-Changes:
+data/db.py — Data access layer (Supabase Postgres backend).
+
+Every public function keeps the exact signature it had under the old
+GCS-JSON backend, so pages/*.py, admin/dashboard.py and app.py did not need
+to change except for the users.name -> username and
+registrations.reg_id -> registration_id field renames (see admin/dashboard.py).
+
   - No registration required: users can vote in any tournament directly
   - Tournament ID uniqueness enforced
   - Match ID uniqueness enforced within tournament
-  - delete_tournament deletes all related data
+  - delete_tournament / delete_match / delete_user rely on ON DELETE CASCADE
+    in the Supabase schema — a single DELETE on the parent row cleans up
+    every dependent row (votes, points, match_players, registrations,
+    sessions, penalties).
   - nickname defaults to first name
   - register_user kept for compatibility but auto-called on first vote
 """
 
 import hashlib
 import uuid
-from datetime import datetime
-from data.gcs import read_table, write_table
+from datetime import datetime, timezone
+from data.supabase_client import (
+    read_table, get_client, sess_clear,
+    ttl_votes_clear, ttl_votes_write_through, ttl_sessions_clear,
+)
 
 
-def _now():          return datetime.utcnow().isoformat()
-def _uid():          return str(uuid.uuid4())[:8]
+def _now():          return datetime.now(timezone.utc).isoformat()
+def _uid():           return str(uuid.uuid4())[:8]
 def _hash(pw: str):  return hashlib.sha256(pw.encode()).hexdigest()   # legacy SHA-256
+def _sb():            return get_client()
 
 def _hash_bcrypt(pw: str) -> str:
     import bcrypt
@@ -25,18 +37,6 @@ def _hash_bcrypt(pw: str) -> str:
 
 def _is_bcrypt(h: str) -> bool:
     return h.startswith("$2b$") or h.startswith("$2a$")
-
-def _insert(table: str, record: dict):
-    rows = read_table(table); rows.append(record); write_table(table, rows)
-
-def _update_where(table: str, match_fn, update_fn):
-    rows = read_table(table)
-    for r in rows:
-        if match_fn(r): update_fn(r)
-    write_table(table, rows)
-
-def _delete_where(table: str, match_fn):
-    write_table(table, [r for r in read_table(table) if not match_fn(r)])
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ def get_user_by_id(user_id: str) -> dict | None:
 
 def get_user_by_name(name: str) -> dict | None:
     return next((u for u in read_table("users")
-                 if u["name"].lower() == name.lower()), None)
+                 if u["username"].lower() == name.lower()), None)
 
 def get_display_name(user_id: str) -> str:
     u    = get_user_by_id(user_id)
@@ -69,7 +69,7 @@ def create_user(name: str, password: str, role: str = "user",
     uid  = _uid()
     user = {
         "user_id"             : uid,
-        "name"                : name,
+        "username"            : name,
         "nickname"            : _first_name(name),   # first name, not user_id
         "role"                : role,
         "password_hash"       : _hash(password),
@@ -78,7 +78,8 @@ def create_user(name: str, password: str, role: str = "user",
         "created_by"          : created_by,
         "created_at"          : _now(),
     }
-    _insert("users", user)
+    _sb().table("users").insert(user).execute()
+    sess_clear("users")
     return user
 
 def verify_password(user_id: str, password: str) -> bool:
@@ -98,29 +99,37 @@ def is_legacy_password(user_id: str) -> bool:
 
 def change_password(user_id: str, new_password: str):
     """Always stores new passwords as bcrypt."""
-    new_hash = _hash_bcrypt(new_password)
-    _update_where("users",
-        lambda r: r["user_id"] == user_id,
-        lambda r: r.update({"password_hash"       : new_hash,
-                             "must_change_password": False}))
+    _sb().table("users").update({
+        "password_hash"       : _hash_bcrypt(new_password),
+        "must_change_password": False,
+    }).eq("user_id", user_id).execute()
+    sess_clear("users")
 
 def update_nickname(user_id: str, nickname: str):
-    _update_where("users",
-        lambda r: r["user_id"] == user_id,
-        lambda r: r.update({"nickname": nickname.strip()}))
+    _sb().table("users").update({"nickname": nickname.strip()}) \
+        .eq("user_id", user_id).execute()
+    sess_clear("users")
 
 def update_user_timezone(user_id: str, tz: str):
-    _update_where("users",
-        lambda r: r["user_id"] == user_id,
-        lambda r: r.update({"timezone": tz}))
+    _sb().table("users").update({"timezone": tz}).eq("user_id", user_id).execute()
+    sess_clear("users")
 
 def set_user_role(user_id: str, role: str):
-    _update_where("users",
-        lambda r: r["user_id"] == user_id,
-        lambda r: r.update({"role": role}))
+    _sb().table("users").update({"role": role}).eq("user_id", user_id).execute()
+    sess_clear("users")
+
+def force_password_change(user_id: str):
+    """Force must_change_password=True — used by admin password resets."""
+    _sb().table("users").update({"must_change_password": True}) \
+        .eq("user_id", user_id).execute()
+    sess_clear("users")
 
 def delete_user(user_id: str):
-    _delete_where("users", lambda r: r["user_id"] == user_id)
+    """ON DELETE CASCADE removes votes/points/registrations/match_players/
+    sessions/penalties for this user automatically."""
+    _sb().table("users").delete().eq("user_id", user_id).execute()
+    sess_clear("users"); sess_clear("registrations"); sess_clear("points")
+    ttl_votes_clear(); ttl_sessions_clear()
 
 
 # ── Tournaments ───────────────────────────────────────────────────────────────
@@ -137,7 +146,7 @@ def tournament_id_exists(tid: str) -> bool:
     return get_tournament(tid) is not None
 
 def create_tournament(data: dict):
-    _insert("tournaments", {
+    _sb().table("tournaments").insert({
         "tournament_id" : data["tournament_id"],
         "name"          : data["name"],
         "sport"         : data["sport"],
@@ -147,20 +156,21 @@ def create_tournament(data: dict):
         "penalty_points": float(data["penalty_points"]),
         "created_by"    : data.get("created_by", "admin"),
         "created_at"    : _now(),
-    })
+    }).execute()
+    sess_clear("tournaments")
 
 def update_tournament_status(tid: str, status: str):
-    _update_where("tournaments",
-        lambda r: r["tournament_id"] == tid,
-        lambda r: r.update({"status": status}))
+    _sb().table("tournaments").update({"status": status}) \
+        .eq("tournament_id", tid).execute()
+    sess_clear("tournaments")
 
 def delete_tournament(tid: str):
-    """Delete tournament and ALL related data."""
-    _delete_where("tournaments",   lambda r: r["tournament_id"] == tid)
-    _delete_where("registrations", lambda r: r["tournament_id"] == tid)
-    _delete_where("matches",       lambda r: r["tournament_id"] == tid)
-    _delete_where("votes",         lambda r: r["tournament_id"] == tid)
-    _delete_where("points",        lambda r: r["tournament_id"] == tid)
+    """Delete tournament — ON DELETE CASCADE removes matches (which in turn
+    cascades to votes/points/match_players), registrations and penalties."""
+    _sb().table("tournaments").delete().eq("tournament_id", tid).execute()
+    sess_clear("tournaments"); sess_clear("matches")
+    sess_clear("registrations"); sess_clear("points")
+    ttl_votes_clear()
 
 
 # ── Registrations (auto — no user action needed) ──────────────────────────────
@@ -175,12 +185,13 @@ def is_registered(user_id: str, tid: str) -> bool:
 def ensure_registered(user_id: str, tid: str):
     """Auto-register user when they first vote in a tournament."""
     if not is_registered(user_id, tid):
-        _insert("registrations", {
-            "reg_id"       : _uid(),
-            "user_id"      : user_id,
-            "tournament_id": tid,
-            "registered_at": _now(),
-        })
+        _sb().table("registrations").insert({
+            "registration_id": _uid(),
+            "user_id"        : user_id,
+            "tournament_id"  : tid,
+            "registered_at"  : _now(),
+        }).execute()
+        sess_clear("registrations")
 
 # Keep for compatibility
 def register_user(user_id: str, tid: str):
@@ -188,7 +199,7 @@ def register_user(user_id: str, tid: str):
 
 
 # ── match_players ─────────────────────────────────────────────────────────────
-# match_players.json — one record per (player, match).
+# match_players — one record per (player, match).
 # status: "voted" | "missed" | "quit" | "not_started"
 #   voted       — player cast a vote before cutoff
 #   missed      — player was active but did not vote
@@ -197,41 +208,37 @@ def register_user(user_id: str, tid: str):
 #
 # vote field stores the actual vote string when status="voted", else "".
 # This is the single source of truth for points calculation.
-# All reads/writes bypass the GCS cache (_fetch/_push directly).
-
-def _mp_fetch() -> list[dict]:
-    from data.gcs import _fetch
-    return _fetch("match_players")
-
-def _mp_push(rows: list[dict]):
-    from data.gcs import _push
-    _push("match_players", rows)
+# All reads/writes go straight to Supabase, scoped by match_id/tournament_id
+# — never routed through the session cache — so points calculation always
+# sees a fully fresh, consistent table.
 
 def get_match_players(match_id: str = None, tournament_id: str = None,
                        user_id: str = None) -> list[dict]:
-    """Read match_players fresh from GCS. Filter by any combination of keys."""
-    rows = _mp_fetch()
-    if match_id:      rows = [r for r in rows if r["match_id"] == match_id]
-    if tournament_id: rows = [r for r in rows if r["tournament_id"] == tournament_id]
-    if user_id:       rows = [r for r in rows if r["user_id"] == user_id]
-    return rows
+    """Read match_players fresh from Supabase. Filter by any combination of keys."""
+    q = get_client().table("match_players").select("*")
+    if match_id:      q = q.eq("match_id", match_id)
+    if tournament_id: q = q.eq("tournament_id", tournament_id)
+    if user_id:       q = q.eq("user_id", user_id)
+    return q.execute().data or []
 
 def upsert_match_player(match_id: str, tournament_id: str,
                          user_id: str, status: str,
                          vote: str = "", quit_at: str = ""):
     """
     Insert or update a match_player record.
-    Uses _fetch/_push to bypass cache entirely.
+    Explicit select-then-branch (not a blind upsert) so mp_id/created_at
+    stay stable across re-votes.
     """
-    rows = _mp_fetch()
-    existing = next((r for r in rows
-                     if r["user_id"] == user_id and r["match_id"] == match_id), None)
+    sb = get_client()
+    existing = sb.table("match_players").select("mp_id") \
+        .eq("user_id", user_id).eq("match_id", match_id) \
+        .limit(1).execute().data
     if existing:
-        existing["status"]  = status
-        existing["vote"]    = vote
-        existing["quit_at"] = quit_at
+        sb.table("match_players").update({
+            "status": status, "vote": vote, "quit_at": quit_at,
+        }).eq("mp_id", existing[0]["mp_id"]).execute()
     else:
-        rows.append({
+        sb.table("match_players").insert({
             "mp_id"        : _uid(),
             "match_id"     : match_id,
             "tournament_id": tournament_id,
@@ -240,32 +247,40 @@ def upsert_match_player(match_id: str, tournament_id: str,
             "vote"         : vote,
             "quit_at"      : quit_at,
             "created_at"   : _now(),
-        })
-    _mp_push(rows)
+        }).execute()
 
 def write_match_players_batch(records: list[dict]):
     """
-    Write multiple match_player records at once (single GCS write).
-    Upserts by (user_id, match_id). Used by recalculate_tournament and migration.
+    Write multiple match_player records at once. Upserts by (user_id, match_id).
+    Used by recalculate_tournament and migration.
     """
-    rows = _mp_fetch()
-    key_map = {(r["user_id"], r["match_id"]): r for r in rows}
+    sb = get_client()
+    match_ids = list({r["match_id"] for r in records})
+    existing  = (sb.table("match_players").select("mp_id,user_id,match_id")
+                 .in_("match_id", match_ids).execute().data
+                 if match_ids else [])
+    key_map = {(r["user_id"], r["match_id"]): r["mp_id"] for r in existing}
+
+    updates, inserts = [], []
     for rec in records:
         key = (rec["user_id"], rec["match_id"])
         if key in key_map:
-            key_map[key].update(rec)
+            row = {k: v for k, v in rec.items() if k not in ("mp_id", "created_at")}
+            updates.append((key_map[key], row))
         else:
-            if "mp_id" not in rec:
-                rec["mp_id"] = _uid()
-            if "created_at" not in rec:
-                rec["created_at"] = _now()
-            key_map[key] = rec
-    _mp_push(list(key_map.values()))
+            rec = dict(rec)
+            rec.setdefault("mp_id", _uid())
+            rec.setdefault("created_at", _now())
+            inserts.append(rec)
+
+    for mp_id, row in updates:
+        sb.table("match_players").update(row).eq("mp_id", mp_id).execute()
+    for i in range(0, len(inserts), 500):
+        sb.table("match_players").insert(inserts[i:i + 500]).execute()
 
 def delete_match_players_for_match(match_id: str):
     """Remove all match_player records for a match (used when rebuilding)."""
-    rows = [r for r in _mp_fetch() if r["match_id"] != match_id]
-    _mp_push(rows)
+    get_client().table("match_players").delete().eq("match_id", match_id).execute()
 
 
 # ── Matches ───────────────────────────────────────────────────────────────────
@@ -286,7 +301,7 @@ def match_id_exists_in_tournament(match_id: str, tournament_id: str) -> bool:
                for m in read_table("matches"))
 
 def create_match(data: dict):
-    _insert("matches", {
+    _sb().table("matches").insert({
         "match_id"     : data["match_id"],
         "tournament_id": data["tournament_id"],
         "title"        : data["title"],
@@ -302,30 +317,50 @@ def create_match(data: dict):
         "result"       : "",
         "created_by"   : data.get("created_by", "admin"),
         "created_at"   : _now(),
-    })
+    }).execute()
+    sess_clear("matches")
 
 def bulk_create_matches(tid: str, rows: list[dict], created_by: str):
-    for row in rows:
-        row["tournament_id"] = tid
-        row["created_by"]    = created_by
-        create_match(row)
+    payload = [{
+        "match_id"     : r["match_id"],
+        "tournament_id": tid,
+        "title"        : r["title"],
+        "location"     : r["location"],
+        "match_date"   : r["match_date"],
+        "start_time"   : r["start_time"],
+        "timezone"     : r["timezone"],
+        "options"      : r["options"],
+        "scoring_mode" : r.get("scoring_mode", "ratio"),
+        "fixed_odds"   : float(r.get("fixed_odds", 1.0)),
+        "poll_mode"    : r.get("poll_mode", "closed"),
+        "status"       : "upcoming",
+        "result"       : "",
+        "created_by"   : created_by,
+        "created_at"   : _now(),
+    } for r in rows]
+    if payload:
+        _sb().table("matches").insert(payload).execute()
+    sess_clear("matches")
 
 def update_match_result(match_id: str, result: str):
-    _update_where("matches",
-        lambda r: r["match_id"] == match_id,
-        lambda r: r.update({"result": result, "status": "completed"}))
+    _sb().table("matches").update({"result": result, "status": "completed"}) \
+        .eq("match_id", match_id).execute()
+    sess_clear("matches")
 
 def mark_match_abandoned(match_id: str):
     """No voters — mark as abandoned. No points calculated, misses not counted."""
-    _update_where("matches",
-        lambda r: r["match_id"] == match_id,
-        lambda r: r.update({"result": "abandoned", "status": "abandoned"}))
+    _sb().table("matches").update({"result": "abandoned", "status": "abandoned"}) \
+        .eq("match_id", match_id).execute()
+    sess_clear("matches")
     # Clear any previously calculated points for this match
-    _delete_where("points", lambda r: r["match_id"] == match_id)
+    _sb().table("points").delete().eq("match_id", match_id).execute()
+    sess_clear("points")
 
 def delete_match(match_id: str):
-    for table in ("matches", "votes", "points"):
-        _delete_where(table, lambda r, m=match_id: r["match_id"] == m)
+    """ON DELETE CASCADE removes votes/points/match_players for this match."""
+    _sb().table("matches").delete().eq("match_id", match_id).execute()
+    sess_clear("matches"); sess_clear("points")
+    ttl_votes_clear()
 
 
 # ── Votes ─────────────────────────────────────────────────────────────────────
@@ -342,44 +377,39 @@ def get_user_vote(user_id: str, match_id: str) -> dict | None:
 
 def cast_vote(user_id: str, match_id: str, tid: str, vote: str):
     ensure_registered(user_id, tid)   # auto-register on first vote
-    # Write match_player record (voted status) — bypasses cache
     upsert_match_player(match_id, tid, user_id, status="voted", vote=vote)
-    # Build new votes list locally, write async to GCS
-    from data.gcs import read_table as _rt, write_table as _wt
-    votes = [v for v in _rt("votes")
-             if not (v["user_id"] == user_id and v["match_id"] == match_id)]
-    votes.append({
+    record = {
         "vote_id"      : _uid(), "user_id": user_id,
         "match_id"     : match_id, "tournament_id": tid,
         "vote"         : vote, "voted_at": _now(),
-        "updated_at"   : "", "update_count": 0})
-    _wt("votes", votes, async_write=True)   # instant local update, async GCS
+        "updated_at"   : None, "update_count": 0,
+    }
+    get_client().table("votes").upsert(record, on_conflict="user_id,match_id").execute()
+    ttl_votes_write_through(user_id, match_id, record)
 
 def update_vote(user_id: str, match_id: str, new_vote: str):
-    # Update match_player record with new vote
-    rows = _mp_fetch()
-    for r in rows:
-        if r["user_id"] == user_id and r["match_id"] == match_id:
-            r["vote"] = new_vote
-            break
-    _mp_push(rows)
-    from data.gcs import read_table as _rt, write_table as _wt
-    existing  = get_user_vote(user_id, match_id)
-    cur_count = int((existing or {}).get("update_count", 0))
-    voted_at  = (existing or {}).get("voted_at", _now())
-    tid       = (existing or {}).get("tournament_id", "")
-    votes     = [v for v in _rt("votes")
-                 if not (v["user_id"] == user_id and v["match_id"] == match_id)]
-    votes.append({
-        "vote_id"      : _uid(), "user_id": user_id,
-        "match_id"     : match_id, "tournament_id": tid,
+    existing  = get_user_vote(user_id, match_id) or {}
+    cur_count = int(existing.get("update_count", 0))
+    voted_at  = existing.get("voted_at") or _now()
+    tid       = existing.get("tournament_id", "")
+
+    sb = get_client()
+    sb.table("match_players").update({"vote": new_vote}) \
+        .eq("user_id", user_id).eq("match_id", match_id).execute()
+
+    record = {
+        "vote_id"      : existing.get("vote_id") or _uid(),
+        "user_id"      : user_id, "match_id": match_id, "tournament_id": tid,
         "vote"         : new_vote, "voted_at": voted_at,
-        "updated_at"   : _now(), "update_count": cur_count + 1})
-    _wt("votes", votes, async_write=True)   # instant local update, async GCS
+        "updated_at"   : _now(), "update_count": cur_count + 1,
+    }
+    sb.table("votes").upsert(record, on_conflict="user_id,match_id").execute()
+    ttl_votes_write_through(user_id, match_id, record)
 
 def delete_vote(user_id: str, match_id: str):
-    _delete_where("votes",
-        lambda r: r["user_id"] == user_id and r["match_id"] == match_id)
+    get_client().table("votes").delete() \
+        .eq("user_id", user_id).eq("match_id", match_id).execute()
+    ttl_votes_clear()
 
 
 # ── Points ────────────────────────────────────────────────────────────────────
@@ -391,34 +421,36 @@ def get_points(tournament_id: str = None, user_id: str = None) -> list[dict]:
     return ps
 
 def save_points_batch(records: list[dict]):
-    existing = read_table("points")
     now = _now()
-    for r in records:
-        existing.append({
-            "point_id"      : _uid(),
-            "user_id"       : r["user_id"],
-            "match_id"      : r["match_id"],
-            "tournament_id" : r["tournament_id"],
-            "base_points"   : r.get("base_points",    0),
-            "penalty_points": r.get("penalty_points", 0),
-            "bonus_points"  : r.get("bonus_points",   0),
-            "total_points"  : r.get("total_points",   0),
-            "note"          : r.get("note",           ""),
-            "calculated_at" : now,
-        })
-    write_table("points", existing)
+    payload = [{
+        "point_id"      : _uid(),
+        "user_id"       : r["user_id"],
+        "match_id"      : r["match_id"],
+        "tournament_id" : r["tournament_id"],
+        "base_points"   : r.get("base_points",    0),
+        "penalty_points": r.get("penalty_points", 0),
+        "bonus_points"  : r.get("bonus_points",   0),
+        "total_points"  : r.get("total_points",   0),
+        "note"          : r.get("note",           ""),
+        "calculated_at" : now,
+    } for r in records]
+    sb = get_client()
+    for i in range(0, len(payload), 500):
+        sb.table("points").insert(payload[i:i + 500]).execute()
+    sess_clear("points")
 
 def delete_match_points(match_id: str):
-    _delete_where("points", lambda r: r["match_id"] == match_id)
+    get_client().table("points").delete().eq("match_id", match_id).execute()
+    sess_clear("points")
 
 
 # ── Penalties ─────────────────────────────────────────────────────────────────
 
 def get_penalties(tournament_id: str) -> list[dict]:
     """Return all manual penalties for a tournament, newest first."""
-    ps = [p for p in read_table("penalties")
-          if p["tournament_id"] == tournament_id]
-    return sorted(ps, key=lambda p: p.get("created_at", ""), reverse=True)
+    return get_client().table("penalties").select("*") \
+        .eq("tournament_id", tournament_id) \
+        .order("created_at", desc=True).execute().data or []
 
 
 def add_penalty(tournament_id: str, user_id: str,
@@ -435,9 +467,9 @@ def add_penalty(tournament_id: str, user_id: str,
         "reason"       : reason.strip(),
         "created_at"   : _now(),
     }
-    _insert("penalties", record)
+    get_client().table("penalties").insert(record).execute()
     return record
 
 
 def delete_penalty(penalty_id: str):
-    _delete_where("penalties", lambda r: r.get("penalty_id") == penalty_id)
+    get_client().table("penalties").delete().eq("penalty_id", penalty_id).execute()

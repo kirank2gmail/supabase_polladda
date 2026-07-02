@@ -42,12 +42,6 @@ def run_migration_in_streamlit(tournament_id: str | None = None) -> int:
 if __name__ == "__main__":
     sys.path.insert(0, ".")
 
-    try:
-        from data.gcs import _fetch, _push
-    except ImportError:
-        print("Run from repo root: python migrate_match_players.py")
-        sys.exit(1)
-
     from data.match_players import migrate_from_votes
 
     tid = None
@@ -61,5 +55,5 @@ if __name__ == "__main__":
     else:
         print("Rebuilding match_players for ALL tournaments …")
 
-    n = migrate_from_votes(tournament_id=tid, gcs_fetch_fn=_fetch, gcs_push_fn=_push)
+    n = migrate_from_votes(tournament_id=tid)
     print(f"Done — {n} record(s) written")
