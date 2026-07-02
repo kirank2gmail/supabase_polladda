@@ -61,8 +61,18 @@ def _now() -> str:
 
 
 def _match_dt(m: dict) -> str:
-    """Sortable 'YYYY-MM-DD HH:MM' string from a match record."""
-    return f"{m['match_date']} {m['start_time']}"
+    """
+    Sortable 'YYYY-MM-DD HH:MM <match_id>' string from a match record.
+
+    match_id is appended as a deterministic tiebreaker for matches that
+    share the exact same kickoff time (e.g. two group-stage games starting
+    simultaneously) — without it, quit/reinstate boundary comparisons
+    (this_dt >= from_dt) and sort() calls become ambiguous for tied
+    matches, since standard `sorted()` only guarantees a *stable* — not a
+    *total* — order, and equal-vs-equal boundary comparisons can't tell
+    which side of the cut a tied match belongs on.
+    """
+    return f"{m['match_date']} {m['start_time']} {m['match_id']}"
 
 
 def _is_abandoned(m: dict) -> bool:
