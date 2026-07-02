@@ -62,17 +62,20 @@ def _now() -> str:
 
 def _match_dt(m: dict) -> str:
     """
-    Sortable 'YYYY-MM-DD HH:MM <match_id>' string from a match record.
+    Sortable ordering key for a match, used for quit/reinstate boundaries
+    and rebuild sequencing.
 
-    match_id is appended as a deterministic tiebreaker for matches that
-    share the exact same kickoff time (e.g. two group-stage games starting
-    simultaneously) — without it, quit/reinstate boundary comparisons
-    (this_dt >= from_dt) and sort() calls become ambiguous for tied
-    matches, since standard `sorted()` only guarantees a *stable* — not a
-    *total* — order, and equal-vs-equal boundary comparisons can't tell
-    which side of the cut a tied match belongs on.
+    Ordering is driven by match_id, not match_date/start_time: this app's
+    convention is that match IDs are assigned in strict sequential order
+    by the admin when matches are created, so match_id is the authoritative
+    "which match comes first" signal (and, unlike kickoff time, is never
+    ambiguous — two matches can start simultaneously, but they can't share
+    an ID). Purely numeric IDs are zero-padded so they sort numerically
+    (as plain strings "10" sorts before "2"); non-numeric IDs fall back to
+    plain string order, sorting after all-numeric ones.
     """
-    return f"{m['match_date']} {m['start_time']} {m['match_id']}"
+    mid = m["match_id"]
+    return f"0{int(mid):010d}" if mid.isdigit() else f"1{mid}"
 
 
 def _is_abandoned(m: dict) -> bool:
@@ -402,9 +405,8 @@ def quit_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
     Mark a player as quit from from_match_id onwards (inclusive).
 
     Determines which match_ids come on or after from_match_id by sorting
-    the tournament's matches chronologically and taking the tail from
-    from_match_id.  No datetime arithmetic needed — match_id membership
-    in that set is sufficient.
+    the tournament's matches in match_id order and taking the tail from
+    from_match_id.
 
     quit_at stores the from_match_id so reinstate and status display
     can look up the label without re-sorting.
@@ -438,8 +440,8 @@ def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> in
     Reinstate a player from from_match_id onwards (inclusive).
 
     Removes quit records whose match_id falls on or after from_match_id
-    in chronological order, then calls migrate_from_votes to rebuild
-    those matches as voted / missed from votes and registrations.
+    (by match_id order), then calls migrate_from_votes to rebuild those
+    matches as voted / missed from votes and registrations.
 
     Quit records for matches before from_match_id are preserved
     (supports partial quit history: quit, rejoin, quit again).
@@ -486,7 +488,7 @@ def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
 
     quit_at on each record holds the from_match_id passed to quit_player,
     so finding the earliest quit boundary is a simple string comparison
-    using the chronological sort key (_match_dt).
+    using the match_id-order sort key (_match_dt).
     """
     t_mp = select_all(lambda: get_client().table("match_players").select("*")
                        .eq("tournament_id", tournament_id))
@@ -499,7 +501,7 @@ def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
         if m.get("tournament_id") == tournament_id
     }
 
-    # Chronological sort key per match_id (reuses existing _match_dt helper)
+    # Match-id-order sort key per match_id (reuses existing _match_dt helper)
     def _sort_key(mid: str) -> str:
         m = match_map.get(mid)
         return _match_dt(m) if m else ""
