@@ -111,8 +111,9 @@ def _parent_keys(parent_table: str, sb, valid_keys: dict) -> set:
     (e.g. when migrating with --table to scope to a single child table).
     """
     if parent_table not in valid_keys:
+        from data.supabase_client import select_all
         pk   = PK_COL[parent_table]
-        rows = sb.table(parent_table).select(pk).execute().data or []
+        rows = select_all(lambda: sb.table(parent_table).select(pk))
         valid_keys[parent_table] = {r[pk] for r in rows}
     return valid_keys[parent_table]
 

@@ -21,7 +21,7 @@ Exact rules:
     FIXED mode → fixed_odds (flat). Everything else goes to bank.
 """
 
-from data.supabase_client import read_table, get_client, sess_clear, ttl_votes_clear
+from data.supabase_client import read_table, get_client, sess_clear, ttl_votes_clear, select_all
 
 ABANDONED = "abandoned"   # sentinel returned when match has no voters
 
@@ -40,9 +40,8 @@ def _get_match_players_for_match(match_id: str, tournament_id: str) -> list[dict
     Returns all records: voted, missed, quit, not_started.
     No cache — always fresh.
     """
-    return get_client().table("match_players").select("*") \
-        .eq("match_id", match_id).eq("tournament_id", tournament_id) \
-        .execute().data or []
+    return select_all(lambda: get_client().table("match_players").select("*")
+                       .eq("match_id", match_id).eq("tournament_id", tournament_id))
 
 def _get_votes(match_id=None, tournament_id=None):
     vs = read_table("votes")
@@ -79,8 +78,8 @@ def _count_prior_misses(user_id: str, match_id: str,
             reads when called in a loop).
     """
     if all_mp is None:
-        all_mp = get_client().table("match_players").select("*") \
-            .eq("tournament_id", tournament_id).execute().data or []
+        all_mp = select_all(lambda: get_client().table("match_players").select("*")
+                             .eq("tournament_id", tournament_id))
 
     # Get this match's date+time for "before" comparison
     all_matches = _get_matches(tournament_id=tournament_id)
@@ -138,8 +137,8 @@ def calculate_match_points(match_id: str, tournament_id: str,
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
     # Read match_players fresh, tournament-scoped — single source of truth, no cache
-    all_mp   = get_client().table("match_players").select("*") \
-        .eq("tournament_id", tournament_id).execute().data or []
+    all_mp   = select_all(lambda: get_client().table("match_players").select("*")
+                           .eq("tournament_id", tournament_id))
     mp_match = [r for r in all_mp if r["match_id"] == match_id]
 
     # Split by status — match_players has all records pre-computed
@@ -308,9 +307,8 @@ def run_points_calculation(match_id: str, tournament_id: str,
 
     # Use match_players as the source of truth for who is active.
     # Quit players may still have votes on record — ignore them here.
-    mp_match = get_client().table("match_players").select("*") \
-        .eq("match_id", match_id).eq("tournament_id", tournament_id) \
-        .execute().data or []
+    mp_match = select_all(lambda: get_client().table("match_players").select("*")
+                           .eq("match_id", match_id).eq("tournament_id", tournament_id))
 
     active_voted = [r for r in mp_match if r["status"] == "voted"]
 

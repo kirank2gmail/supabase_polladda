@@ -28,6 +28,9 @@ import streamlit as st
 SESSION_KEY  = "_sb_cache"
 VOTES_TTL    = 30    # seconds — how stale other users' votes can be
 SESSION_TBLS = {"users", "tournaments", "matches", "registrations", "points"}
+PAGE_SIZE    = 1000  # PostgREST's default max rows per response — anything
+                      # that can return more rows than this MUST paginate via
+                      # select_all(), or results are silently truncated.
 
 
 # ── Client ────────────────────────────────────────────────────────────────────
@@ -40,9 +43,32 @@ def get_client():
     return create_client(url, key)
 
 
+def select_all(build_query) -> list[dict]:
+    """
+    Run a Supabase select to completion, paginating via .range() so results
+    are never silently capped by PostgREST's default max-rows limit
+    (1000 by default on Supabase — any table/filter that can return more
+    rows than that WILL be truncated by a bare .execute() otherwise).
+
+    build_query: zero-arg callable returning a FRESH, filtered (not yet
+    executed) query builder each time it's called, e.g.:
+        select_all(lambda: get_client().table("votes").select("*").eq("tournament_id", tid))
+    (query builders are single-use, so we need a fresh one per page.)
+    """
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page = build_query().range(offset, offset + PAGE_SIZE - 1).execute().data or []
+        rows.extend(page)
+        if len(page) < PAGE_SIZE:
+            break
+        offset += PAGE_SIZE
+    return rows
+
+
 def _raw_fetch(table: str) -> list[dict]:
-    """Synchronous full-table read."""
-    rows = get_client().table(table).select("*").execute().data or []
+    """Synchronous full-table read, paginated."""
+    rows = select_all(lambda: get_client().table(table).select("*"))
     if table == "matches":
         # Single normalization choke point: Postgres TIME columns come back
         # as "HH:MM:SS" from PostgREST; the rest of the app (utils/timezone.py

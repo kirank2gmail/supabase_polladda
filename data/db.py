@@ -21,7 +21,7 @@ import hashlib
 import uuid
 from datetime import datetime, timezone
 from data.supabase_client import (
-    read_table, get_client, sess_clear,
+    read_table, get_client, sess_clear, select_all,
     ttl_votes_clear, ttl_votes_write_through, ttl_sessions_clear,
 )
 
@@ -215,11 +215,13 @@ def register_user(user_id: str, tid: str):
 def get_match_players(match_id: str = None, tournament_id: str = None,
                        user_id: str = None) -> list[dict]:
     """Read match_players fresh from Supabase. Filter by any combination of keys."""
-    q = get_client().table("match_players").select("*")
-    if match_id:      q = q.eq("match_id", match_id)
-    if tournament_id: q = q.eq("tournament_id", tournament_id)
-    if user_id:       q = q.eq("user_id", user_id)
-    return q.execute().data or []
+    def _build():
+        q = get_client().table("match_players").select("*")
+        if match_id:      q = q.eq("match_id", match_id)
+        if tournament_id: q = q.eq("tournament_id", tournament_id)
+        if user_id:       q = q.eq("user_id", user_id)
+        return q
+    return select_all(_build)
 
 def upsert_match_player(match_id: str, tournament_id: str,
                          user_id: str, status: str,
@@ -256,8 +258,8 @@ def write_match_players_batch(records: list[dict]):
     """
     sb = get_client()
     match_ids = list({r["match_id"] for r in records})
-    existing  = (sb.table("match_players").select("mp_id,user_id,match_id")
-                 .in_("match_id", match_ids).execute().data
+    existing  = (select_all(lambda: sb.table("match_players")
+                            .select("mp_id,user_id,match_id").in_("match_id", match_ids))
                  if match_ids else [])
     key_map = {(r["user_id"], r["match_id"]): r["mp_id"] for r in existing}
 
@@ -448,9 +450,9 @@ def delete_match_points(match_id: str):
 
 def get_penalties(tournament_id: str) -> list[dict]:
     """Return all manual penalties for a tournament, newest first."""
-    return get_client().table("penalties").select("*") \
-        .eq("tournament_id", tournament_id) \
-        .order("created_at", desc=True).execute().data or []
+    return select_all(lambda: get_client().table("penalties").select("*")
+                       .eq("tournament_id", tournament_id)
+                       .order("created_at", desc=True))
 
 
 def add_penalty(tournament_id: str, user_id: str,

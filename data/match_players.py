@@ -47,7 +47,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from data.supabase_client import read_table, get_client, sess_clear
+from data.supabase_client import read_table, get_client, sess_clear, select_all
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -292,8 +292,8 @@ def migrate_from_votes(
     if not tids:
         return 0
 
-    all_votes   = sb.table("votes").select("*").in_("tournament_id", tids).execute().data or []
-    existing_mp = sb.table("match_players").select("*").in_("tournament_id", tids).execute().data or []
+    all_votes   = select_all(lambda: sb.table("votes").select("*").in_("tournament_id", tids))
+    existing_mp = select_all(lambda: sb.table("match_players").select("*").in_("tournament_id", tids))
 
     new_mp: list[dict] = []
     for tid in tids:
@@ -344,8 +344,8 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
 
     all_matches   = read_table("matches")
     registrations = read_table("registrations")
-    existing_mp   = sb.table("match_players").select("*") \
-        .eq("tournament_id", tournament_id).execute().data or []
+    existing_mp   = select_all(lambda: sb.table("match_players").select("*")
+                                .eq("tournament_id", tournament_id))
 
     this_match = next(
         (m for m in all_matches if m["match_id"] == match_id), None
@@ -357,8 +357,8 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
                    if m.get("tournament_id") == tournament_id}
     quit_boundaries = _build_quit_boundaries(tournament_id, t_match_map, existing_mp)
 
-    all_votes = sb.table("votes").select("*") \
-        .eq("match_id", match_id).eq("tournament_id", tournament_id).execute().data or []
+    all_votes = select_all(lambda: sb.table("votes").select("*")
+                            .eq("match_id", match_id).eq("tournament_id", tournament_id))
 
     new_records = _build_records_for_match(
         match_id, tournament_id,
@@ -478,8 +478,8 @@ def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
     so finding the earliest quit boundary is a simple string comparison
     using the chronological sort key (_match_dt).
     """
-    t_mp = get_client().table("match_players").select("*") \
-        .eq("tournament_id", tournament_id).execute().data or []
+    t_mp = select_all(lambda: get_client().table("match_players").select("*")
+                       .eq("tournament_id", tournament_id))
     all_matches = read_table("matches")
 
     # match_id → match dict (for label generation and sort key)
@@ -546,8 +546,8 @@ def apply_miss_floor(tournament_id: str, from_match_id: str) -> int:
                            if t["tournament_id"] == tournament_id), None)
     allowed_misses = int((tournament or {}).get("allowed_misses", 3))
 
-    existing_mp = sb.table("match_players").select("*") \
-        .eq("tournament_id", tournament_id).execute().data or []
+    existing_mp = select_all(lambda: sb.table("match_players").select("*")
+                              .eq("tournament_id", tournament_id))
 
     # Active players = those with any non-quit record in this tournament
     active_uids = {
@@ -602,9 +602,8 @@ def get_miss_floor_status(tournament_id: str) -> dict | None:
         "record_count":  int,
       }
     """
-    floor_records = get_client().table("match_players").select("*") \
-        .eq("tournament_id", tournament_id).eq("note", "miss_floor") \
-        .execute().data or []
+    floor_records = select_all(lambda: get_client().table("match_players").select("*")
+                                .eq("tournament_id", tournament_id).eq("note", "miss_floor"))
     if not floor_records:
         return None
 
