@@ -778,7 +778,7 @@ def _quit_tab():
     )
 
     active_uids  = [uid for uid in sorted_uids
-                    if player_status[uid]["active_matches"] > 0]
+                    if not player_status[uid]["has_quit_records"]]
     active_names = [umap.get(uid, uid) for uid in active_uids]
 
     if not active_uids:

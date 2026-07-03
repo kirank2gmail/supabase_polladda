@@ -44,7 +44,7 @@ export function AdminQuitTab() {
   const sortedPlayers = [...players].sort((a, b) =>
     a.has_quit_records === b.has_quit_records ? a.name.localeCompare(b.name) : a.has_quit_records ? -1 : 1
   );
-  const activePlayers = sortedPlayers.filter((p) => p.active_matches > 0);
+  const activePlayers = sortedPlayers.filter((p) => !p.has_quit_records);
   const quitPlayers = sortedPlayers.filter((p) => p.has_quit_records);
 
   return (
