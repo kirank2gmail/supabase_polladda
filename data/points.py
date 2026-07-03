@@ -125,7 +125,13 @@ def _count_prior_misses(user_id: str, match_id: str,
 
     return real_count
 def calculate_match_points(match_id: str, tournament_id: str,
-                            winning_option: str) -> list[dict]:
+                            winning_option: str, all_mp: list = None) -> list[dict]:
+    """
+    all_mp: pre-fetched tournament-scoped match_players (avoids a redundant
+    full-tournament fetch when the caller — e.g. recalculate_tournament —
+    already has one fresh snapshot to share across many matches in one batch).
+    Fetched fresh here if not provided.
+    """
     tournament = _get_tournament(tournament_id)
     if not tournament:
         raise ValueError(f"Tournament {tournament_id} not found")
@@ -137,8 +143,9 @@ def calculate_match_points(match_id: str, tournament_id: str,
     penalty_pts    = float(tournament.get("penalty_points", 1.0))
 
     # Read match_players fresh, tournament-scoped — single source of truth, no cache
-    all_mp   = select_all(lambda: get_client().table("match_players").select("*")
-                           .eq("tournament_id", tournament_id))
+    if all_mp is None:
+        all_mp = select_all(lambda: get_client().table("match_players").select("*")
+                             .eq("tournament_id", tournament_id))
     mp_match = [r for r in all_mp if r["match_id"] == match_id]
 
     # Split by status — match_players has all records pre-computed
@@ -288,7 +295,7 @@ def _mark_abandoned(match_id: str):
 
 
 def run_points_calculation(match_id: str, tournament_id: str,
-                            winning_option: str):
+                            winning_option: str, all_mp: list = None):
     """
     Dedup votes → check active (non-quit) voters → calculate → save.
     Returns ABANDONED (sentinel string) when the match has no valid contest.
@@ -302,13 +309,21 @@ def run_points_calculation(match_id: str, tournament_id: str,
     Quit players are excluded from abandon checks — their historical votes
     in the votes table are irrelevant once they have quit status in
     match_players.
+
+    all_mp: pre-fetched tournament-scoped match_players (see
+    calculate_match_points). Passing this in when recalculating many matches
+    in one batch (recalculate_tournament) avoids a full-tournament fetch per
+    match — a real N+1 that made recalculating a ~90-match tournament take
+    over 40 seconds. Fetched fresh here if not provided (single-match saves).
     """
     _deduplicate_votes(match_id)
 
     # Use match_players as the source of truth for who is active.
     # Quit players may still have votes on record — ignore them here.
-    mp_match = select_all(lambda: get_client().table("match_players").select("*")
-                           .eq("match_id", match_id).eq("tournament_id", tournament_id))
+    if all_mp is None:
+        all_mp = select_all(lambda: get_client().table("match_players").select("*")
+                             .eq("tournament_id", tournament_id))
+    mp_match = [r for r in all_mp if r["match_id"] == match_id]
 
     active_voted = [r for r in mp_match if r["status"] == "voted"]
 
@@ -325,7 +340,7 @@ def run_points_calculation(match_id: str, tournament_id: str,
         return ABANDONED
 
     delete_match_points(match_id)
-    records = calculate_match_points(match_id, tournament_id, winning_option)
+    records = calculate_match_points(match_id, tournament_id, winning_option, all_mp=all_mp)
     if records:
         save_points_batch(records)
     return records
@@ -352,6 +367,15 @@ def recalculate_tournament(tournament_id: str) -> tuple[int, int, int]:
          and m.get("result") not in ("", None)],
         key=lambda m: m["match_date"] + " " + m["start_time"]
     )
+
+    # Fetch match_players ONCE for the whole tournament and reuse it across
+    # every match below — nothing in this loop mutates match_players (only
+    # points/matches tables), so one snapshot stays valid throughout. Avoids
+    # an N+1 fetch that made recalculating a ~90-match tournament take 40+
+    # seconds (one full-tournament match_players fetch per match).
+    all_mp = select_all(lambda: get_client().table("match_players").select("*")
+                         .eq("tournament_id", tournament_id))
+
     recalc = abandoned = errors = 0
     for m in done:
         if m.get("status") == "abandoned" and m.get("result") == "abandoned":
@@ -359,7 +383,7 @@ def recalculate_tournament(tournament_id: str) -> tuple[int, int, int]:
             abandoned += 1
             continue
         try:
-            result = run_points_calculation(m["match_id"], tournament_id, m.get("result", ""))
+            result = run_points_calculation(m["match_id"], tournament_id, m.get("result", ""), all_mp=all_mp)
             if result is ABANDONED:
                 abandoned += 1
             else:

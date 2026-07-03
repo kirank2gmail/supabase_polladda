@@ -13,6 +13,9 @@ export function AdminResultsTab() {
   const [users, setUsers] = useState<User[]>([]);
   const [penalties, setPenalties] = useState<PenaltyOut[]>([]);
   const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [recalculating, setRecalculating] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
 
   useEffect(() => {
     tournamentsApi.getTournaments().then((ts) => {
@@ -41,19 +44,35 @@ export function AdminResultsTab() {
 
   const handleRecalculate = async () => {
     setMessage(null);
-    const r = await resultsApi.recalculateTournament(selected);
-    let msg = `Done — ${r.recalculated} match(es) recalculated`;
-    if (r.abandoned) msg += `, ${r.abandoned} abandoned (no votes)`;
-    if (r.errors) msg += `, ${r.errors} error(s)`;
-    setMessage(msg);
-    reload();
+    setError(null);
+    setRecalculating(true);
+    try {
+      const r = await resultsApi.recalculateTournament(selected);
+      let msg = `Done — ${r.recalculated} match(es) recalculated`;
+      if (r.abandoned) msg += `, ${r.abandoned} abandoned (no votes)`;
+      if (r.errors) msg += `, ${r.errors} error(s)`;
+      setMessage(msg);
+      reload();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Recalculate failed — check the API server log.");
+    } finally {
+      setRecalculating(false);
+    }
   };
 
   const handleRebuild = async () => {
     setMessage(null);
-    const r = await resultsApi.rebuildMatchPlayers(selected);
-    setMessage(`Done — ${r.written} record(s) written.`);
-    reload();
+    setError(null);
+    setRebuilding(true);
+    try {
+      const r = await resultsApi.rebuildMatchPlayers(selected);
+      setMessage(`Done — ${r.written} record(s) written.`);
+      reload();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Rebuild failed — check the API server log.");
+    } finally {
+      setRebuilding(false);
+    }
   };
 
   return (
@@ -75,19 +94,26 @@ export function AdminResultsTab() {
           {message}
         </div>
       )}
+      {error && (
+        <div className="mb-4 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
       <div className="mb-4 flex items-center justify-between rounded-lg border border-gray-200 p-4">
         <div>
           <p className="font-semibold">🔄 Recalculate All Points</p>
           <p className="text-sm text-gray-500">
-            Recalculates points for every completed match in chronological order.
+            Recalculates points for every completed match in chronological order. Can take up to
+            a minute for large tournaments.
           </p>
         </div>
         <button
           onClick={handleRecalculate}
-          className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+          disabled={recalculating}
+          className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
         >
-          Recalculate Tournament
+          {recalculating ? "Recalculating…" : "Recalculate Tournament"}
         </button>
       </div>
 
@@ -100,9 +126,10 @@ export function AdminResultsTab() {
         </div>
         <button
           onClick={handleRebuild}
-          className="rounded border border-gray-300 px-4 py-2 text-sm font-semibold hover:bg-gray-100"
+          disabled={rebuilding}
+          className="rounded border border-gray-300 px-4 py-2 text-sm font-semibold hover:bg-gray-100 disabled:opacity-50"
         >
-          Rebuild match_players
+          {rebuilding ? "Rebuilding…" : "Rebuild match_players"}
         </button>
       </div>
 
