@@ -6,9 +6,9 @@ export function PenaltiesTable({ penalties }: { penalties: PenaltyOut[] }) {
   return (
     <div className="mt-4">
       <h4 className="mb-2 font-bold">💸 Manual Penalties</h4>
-      <div className="overflow-x-auto rounded-md border border-gray-200">
+      <div className="max-h-48 overflow-auto rounded-md border border-gray-200">
         <table className="w-full border-collapse text-sm">
-          <thead>
+          <thead className="sticky top-0">
             <tr className="bg-[#28324f] text-left text-white">
               <th className="px-3 py-2">Player</th>
               <th className="px-3 py-2">Points</th>

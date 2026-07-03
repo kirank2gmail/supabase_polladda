@@ -37,7 +37,7 @@ export function MatchDetailsSection({ data }: { data: LeaderboardResponse }) {
   return (
     <div className="mt-4">
       <h4 className="mb-2 font-bold">🔍 Match Details</h4>
-      <div className="max-h-64 overflow-y-auto rounded-md border border-gray-200 p-3">
+      <div className="max-h-40 overflow-y-auto rounded-md border border-gray-200 p-3">
         {chunk(data.match_ids_desc, COLS_PER_ROW).map((row, ri) => (
           <div key={ri} className="mb-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
             {row.map((mid) => {
@@ -70,7 +70,7 @@ export function MatchDetailsSection({ data }: { data: LeaderboardResponse }) {
               {match.result ? `Result: ${match.result}` : match.status}
             </span>
           </div>
-          <div className="overflow-x-auto">
+          <div className="max-h-48 overflow-auto">
             <table className="w-full border-collapse text-sm">
               <tbody>
                 {breakdown.map(({ name, val }) => {
