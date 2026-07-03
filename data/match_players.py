@@ -48,6 +48,7 @@ import uuid
 from datetime import datetime, timezone
 
 from data.supabase_client import read_table, get_client, sess_clear, select_all
+from data.tournament_lock import tournament_lock
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -335,13 +336,17 @@ def migrate_from_votes(
 
 def rebuild_for_tournament(tournament_id: str) -> int:
     """
-    Thin wrapper: rebuild match_players for one tournament via
-    migrate_from_votes, then return the record count.
+    Standalone "Rebuild match_players" entry point: rebuild match_players
+    for one tournament via migrate_from_votes, then return the record count.
 
-    Called by _recalculate_tournament in dashboard.py before points are
-    recalculated, so match_players is always fresh and complete.
+    Serialized per tournament_id (see data/tournament_lock.py) — raises
+    RuntimeError if another mutating operation for this tournament is
+    already in progress. recalculate_tournament (data/points.py) calls
+    migrate_from_votes directly instead of this wrapper, so its own lock
+    isn't re-entered here.
     """
-    return migrate_from_votes(tournament_id=tournament_id)
+    with tournament_lock(tournament_id, "rebuild match_players"):
+        return migrate_from_votes(tournament_id=tournament_id)
 
 
 def rebuild_for_match(match_id: str, tournament_id: str) -> int:
@@ -411,28 +416,33 @@ def quit_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
     quit_at stores the from_match_id so reinstate and status display
     can look up the label without re-sorting.
 
+    Serialized per tournament_id (see data/tournament_lock.py) — raises
+    RuntimeError if another mutating operation for this tournament is
+    already in progress.
+
     Returns the number of records updated.
     """
-    all_matches = read_table("matches")
+    with tournament_lock(tournament_id, "quit player"):
+        all_matches = read_table("matches")
 
-    t_matches = sorted(
-        [m for m in all_matches if m.get("tournament_id") == tournament_id],
-        key=_match_dt,
-    )
-    match_ids = [m["match_id"] for m in t_matches]
+        t_matches = sorted(
+            [m for m in all_matches if m.get("tournament_id") == tournament_id],
+            key=_match_dt,
+        )
+        match_ids = [m["match_id"] for m in t_matches]
 
-    if from_match_id not in match_ids:
-        return 0
+        if from_match_id not in match_ids:
+            return 0
 
-    from_idx       = match_ids.index(from_match_id)
-    quit_match_ids = match_ids[from_idx:]
+        from_idx       = match_ids.index(from_match_id)
+        quit_match_ids = match_ids[from_idx:]
 
-    resp = get_client().table("match_players").update({
-        "status": "quit", "quit_at": from_match_id,
-    }).eq("user_id", user_id).eq("tournament_id", tournament_id) \
-        .in_("match_id", quit_match_ids).execute()
+        resp = get_client().table("match_players").update({
+            "status": "quit", "quit_at": from_match_id,
+        }).eq("user_id", user_id).eq("tournament_id", tournament_id) \
+            .in_("match_id", quit_match_ids).execute()
 
-    return len(resp.data) if resp.data is not None else 0
+        return len(resp.data) if resp.data is not None else 0
 
 
 def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
@@ -446,29 +456,35 @@ def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> in
     Quit records for matches before from_match_id are preserved
     (supports partial quit history: quit, rejoin, quit again).
 
+    Serialized per tournament_id (see data/tournament_lock.py) — raises
+    RuntimeError if another mutating operation for this tournament is
+    already in progress. Calls migrate_from_votes (unlocked helper) as an
+    internal sub-step, not the locked rebuild_for_tournament wrapper.
+
     Returns the number of quit records removed before the rebuild.
     """
-    all_matches = read_table("matches")
+    with tournament_lock(tournament_id, "reinstate player"):
+        all_matches = read_table("matches")
 
-    t_matches = sorted(
-        [m for m in all_matches if m.get("tournament_id") == tournament_id],
-        key=_match_dt,
-    )
-    match_ids = [m["match_id"] for m in t_matches]
+        t_matches = sorted(
+            [m for m in all_matches if m.get("tournament_id") == tournament_id],
+            key=_match_dt,
+        )
+        match_ids = [m["match_id"] for m in t_matches]
 
-    if from_match_id not in match_ids:
-        return 0
+        if from_match_id not in match_ids:
+            return 0
 
-    from_idx            = match_ids.index(from_match_id)
-    reinstate_match_ids = match_ids[from_idx:]
+        from_idx            = match_ids.index(from_match_id)
+        reinstate_match_ids = match_ids[from_idx:]
 
-    resp = get_client().table("match_players").delete() \
-        .eq("user_id", user_id).eq("tournament_id", tournament_id) \
-        .eq("status", "quit").in_("match_id", reinstate_match_ids).execute()
-    removed = len(resp.data) if resp.data is not None else 0
+        resp = get_client().table("match_players").delete() \
+            .eq("user_id", user_id).eq("tournament_id", tournament_id) \
+            .eq("status", "quit").in_("match_id", reinstate_match_ids).execute()
+        removed = len(resp.data) if resp.data is not None else 0
 
-    migrate_from_votes(tournament_id=tournament_id)
-    return removed
+        migrate_from_votes(tournament_id=tournament_id)
+        return removed
 
 
 def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
@@ -552,52 +568,61 @@ def apply_miss_floor(tournament_id: str, from_match_id: str) -> int:
     would violate it). _build_records_for_match skips (uid, from_match_id)
     pairs that already have a miss_floor record, so rebuild is safe.
 
+    Serialized per tournament_id (see data/tournament_lock.py) — raises
+    RuntimeError if another mutating operation for this tournament is
+    already in progress.
+
     Returns the number of synthetic records written (one per active player).
     """
-    sb = get_client()
+    with tournament_lock(tournament_id, "apply miss floor"):
+        sb = get_client()
 
-    existing_mp = select_all(lambda: sb.table("match_players").select("*")
-                              .eq("tournament_id", tournament_id))
+        existing_mp = select_all(lambda: sb.table("match_players").select("*")
+                                  .eq("tournament_id", tournament_id))
 
-    # Active players = those with any non-quit record in this tournament
-    active_uids = {
-        r["user_id"] for r in existing_mp
-        if r.get("status") != "quit"
-        and r.get("note") != "miss_floor"
-    }
-
-    # Remove any existing floor records for this tournament (idempotent)
-    sb.table("match_players").delete() \
-        .eq("tournament_id", tournament_id).eq("note", "miss_floor").execute()
-
-    new_records: list[dict] = [
-        {
-            "mp_id"        : _uid(),
-            "match_id"     : from_match_id,
-            "tournament_id": tournament_id,
-            "user_id"      : uid,
-            "status"       : "missed",
-            "vote"         : "",
-            "quit_at"      : "",
-            "note"         : "miss_floor",
-            "created_at"   : _now(),
+        # Active players = those with any non-quit record in this tournament
+        active_uids = {
+            r["user_id"] for r in existing_mp
+            if r.get("status") != "quit"
+            and r.get("note") != "miss_floor"
         }
-        for uid in active_uids
-    ]
 
-    for i in range(0, len(new_records), 500):
-        sb.table("match_players").insert(new_records[i:i + 500]).execute()
-    return len(new_records)
+        # Remove any existing floor records for this tournament (idempotent)
+        sb.table("match_players").delete() \
+            .eq("tournament_id", tournament_id).eq("note", "miss_floor").execute()
+
+        new_records: list[dict] = [
+            {
+                "mp_id"        : _uid(),
+                "match_id"     : from_match_id,
+                "tournament_id": tournament_id,
+                "user_id"      : uid,
+                "status"       : "missed",
+                "vote"         : "",
+                "quit_at"      : "",
+                "note"         : "miss_floor",
+                "created_at"   : _now(),
+            }
+            for uid in active_uids
+        ]
+
+        for i in range(0, len(new_records), 500):
+            sb.table("match_players").insert(new_records[i:i + 500]).execute()
+        return len(new_records)
 
 
 def remove_miss_floor(tournament_id: str) -> int:
     """
     Remove all miss_floor records for a tournament (undo apply_miss_floor).
+
+    Serialized per tournament_id (see data/tournament_lock.py).
+
     Returns the number of records removed.
     """
-    resp = get_client().table("match_players").delete() \
-        .eq("tournament_id", tournament_id).eq("note", "miss_floor").execute()
-    return len(resp.data) if resp.data is not None else 0
+    with tournament_lock(tournament_id, "remove miss floor"):
+        resp = get_client().table("match_players").delete() \
+            .eq("tournament_id", tournament_id).eq("note", "miss_floor").execute()
+        return len(resp.data) if resp.data is not None else 0
 
 
 def get_miss_floor_status(tournament_id: str) -> dict | None:

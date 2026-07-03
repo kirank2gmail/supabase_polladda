@@ -513,13 +513,17 @@ def _results_tab():
         )
         if c2.button("Recalculate Tournament", type="primary",
                      key="recalc_all", use_container_width=True):
-            with st.spinner(f"Recalculating all matches in {sel_n}..."):
-                ok, ab, err = _recalculate_tournament(sel_tid)
-            msg = f"Done — {ok} match(es) recalculated"
-            if ab: msg += f", {ab} abandoned (no votes)"
-            if err: msg += f", {err} error(s)"
-            st.success(msg)
-            st.rerun()
+            try:
+                with st.spinner(f"Recalculating all matches in {sel_n}..."):
+                    ok, ab, err = _recalculate_tournament(sel_tid)
+            except RuntimeError as e:
+                st.error(str(e))
+            else:
+                msg = f"Done — {ok} match(es) recalculated"
+                if ab: msg += f", {ab} abandoned (no votes)"
+                if err: msg += f", {err} error(s)"
+                st.success(msg)
+                st.rerun()
 
     # ── Migrate match_players ─────────────────────────────────────────────────
     with st.container(border=True):
@@ -532,11 +536,15 @@ def _results_tab():
             "repair match_players without recalculating points."
         )
         if c2.button("Rebuild match_players", key="run_migration", use_container_width=True):
-            with st.spinner("Rebuilding match_players…"):
-                from data.match_players import migrate_from_votes
-                n = migrate_from_votes(tournament_id=sel_tid)
-            st.success(f"Done — {n} record(s) written for {sel_n}.")
-            st.rerun()
+            try:
+                with st.spinner("Rebuilding match_players…"):
+                    from data.match_players import rebuild_for_tournament
+                    n = rebuild_for_tournament(sel_tid)
+            except RuntimeError as e:
+                st.error(str(e))
+            else:
+                st.success(f"Done — {n} record(s) written for {sel_n}.")
+                st.rerun()
 
     st.markdown("")
 
@@ -792,20 +800,24 @@ def _quit_tab():
 
             if qc3.button("Mark as Quit", type="primary",
                           key="quit_btn", use_container_width=True):
-                with st.spinner("Updating match_players…"):
-                    n = quit_player(quit_uid, sel_tid, quit_match_id)
-                if n == 0:
-                    st.warning(
-                        f"No match_players records found for **{quit_name}** "
-                        f"at or after the selected match."
-                    )
+                try:
+                    with st.spinner("Updating match_players…"):
+                        n = quit_player(quit_uid, sel_tid, quit_match_id)
+                except RuntimeError as e:
+                    st.error(str(e))
                 else:
-                    st.success(
-                        f"**{quit_name}** marked as quit from "
-                        f"_{quit_label}_ — {n} record(s) updated. "
-                        f"Run **Recalculate Tournament** to apply to points."
-                    )
-                    st.rerun()
+                    if n == 0:
+                        st.warning(
+                            f"No match_players records found for **{quit_name}** "
+                            f"at or after the selected match."
+                        )
+                    else:
+                        st.success(
+                            f"**{quit_name}** marked as quit from "
+                            f"_{quit_label}_ — {n} record(s) updated. "
+                            f"Run **Recalculate Tournament** to apply to points."
+                        )
+                        st.rerun()
 
     st.markdown("")
 
@@ -845,15 +857,19 @@ def _quit_tab():
 
             if rc3.button("Reinstate", type="primary",
                           key="reinstate_btn", use_container_width=True):
-                with st.spinner("Reinstating player and rebuilding match_players…"):
-                    n = reinstate_player(reinstate_uid, sel_tid, rejoin_match_id)
-                st.success(
-                    f"**{reinstate_name}** reinstated from "
-                    f"_{rejoin_label}_ — {n} quit record(s) removed, "
-                    f"match_players rebuilt. "
-                    f"Run **Recalculate Tournament** to apply to points."
-                )
-                st.rerun()
+                try:
+                    with st.spinner("Reinstating player and rebuilding match_players…"):
+                        n = reinstate_player(reinstate_uid, sel_tid, rejoin_match_id)
+                except RuntimeError as e:
+                    st.error(str(e))
+                else:
+                    st.success(
+                        f"**{reinstate_name}** reinstated from "
+                        f"_{rejoin_label}_ — {n} quit record(s) removed, "
+                        f"match_players rebuilt. "
+                        f"Run **Recalculate Tournament** to apply to points."
+                    )
+                    st.rerun()
 
     st.markdown("")
     st.markdown("---")
@@ -879,11 +895,15 @@ def _quit_tab():
         )
         if st.button("Remove Miss Floor", key="remove_floor_btn",
                      use_container_width=False):
-            with st.spinner("Removing miss floor…"):
-                n = remove_miss_floor(sel_tid)
-            st.success(f"Miss floor removed — {n} record(s) deleted. "
-                       "Run **Recalculate Tournament** to apply.")
-            st.rerun()
+            try:
+                with st.spinner("Removing miss floor…"):
+                    n = remove_miss_floor(sel_tid)
+            except RuntimeError as e:
+                st.error(str(e))
+            else:
+                st.success(f"Miss floor removed — {n} record(s) deleted. "
+                           "Run **Recalculate Tournament** to apply.")
+                st.rerun()
     else:
         st.caption("No miss floor active for this tournament.")
         with st.container(border=True):
@@ -895,11 +915,15 @@ def _quit_tab():
             floor_match_id = match_ids[match_labels.index(floor_label)]
             if fc3.button("Apply Miss Floor", type="primary",
                           key="apply_floor_btn", use_container_width=True):
-                with st.spinner("Applying miss floor…"):
-                    n = apply_miss_floor(sel_tid, floor_match_id)
-                st.success(
-                    f"Miss floor applied from _{floor_label}_ — "
-                    f"{n} synthetic record(s) written. "
-                    "Run **Recalculate Tournament** to apply to points."
-                )
-                st.rerun()
+                try:
+                    with st.spinner("Applying miss floor…"):
+                        n = apply_miss_floor(sel_tid, floor_match_id)
+                except RuntimeError as e:
+                    st.error(str(e))
+                else:
+                    st.success(
+                        f"Miss floor applied from _{floor_label}_ — "
+                        f"{n} synthetic record(s) written. "
+                        "Run **Recalculate Tournament** to apply to points."
+                    )
+                    st.rerun()

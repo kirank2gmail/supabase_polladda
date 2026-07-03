@@ -15,7 +15,7 @@ from data.db import (
     get_match,
     get_penalties,
 )
-from data.match_players import migrate_from_votes
+from data.match_players import rebuild_for_tournament
 from data.points import apply_match_result, recalculate_tournament
 from utils.email_sender import email_configured, send_result_emails
 
@@ -45,7 +45,10 @@ def recalculate(tournament_id: str, admin: dict = Depends(require_admin)):
     "/tournaments/{tournament_id}/rebuild-match-players", response_model=RebuildResult
 )
 def rebuild_match_players(tournament_id: str, admin: dict = Depends(require_admin)):
-    n = migrate_from_votes(tournament_id=tournament_id)
+    try:
+        n = rebuild_for_tournament(tournament_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return RebuildResult(written=n)
 
 
@@ -57,7 +60,10 @@ def save_result(
     if not match:
         raise HTTPException(status_code=404, detail="Match not found")
 
-    outcome = apply_match_result(match_id, body.tournament_id, body.winner)
+    try:
+        outcome = apply_match_result(match_id, body.tournament_id, body.winner)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
     email_sent = False
     email_error = None

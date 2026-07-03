@@ -21,24 +21,10 @@ Exact rules:
     FIXED mode → fixed_odds (flat). Everything else goes to bank.
 """
 
-import threading
-
 from data.supabase_client import read_table, get_client, sess_clear, ttl_votes_clear, select_all
+from data.tournament_lock import tournament_lock
 
 ABANDONED = "abandoned"   # sentinel returned when match has no voters
-
-# Root cause of a real data-corruption incident: recalculate_tournament does
-# a delete-then-rebuild of match_players (via rebuild_for_tournament) before
-# recalculating points. Two overlapping calls for the SAME tournament (e.g.
-# a double-click on "Recalculate Tournament" during the ~15-20s it takes,
-# before the frontend had a loading indicator) can interleave their
-# delete+insert sequences, so the points-calculation loop can transiently
-# observe an empty/partial match_players table and wrongly mark unrelated
-# matches abandoned. This lock serializes recalculate_tournament calls for
-# the same tournament within this process (the app runs single-process/
-# single-worker, so this fully prevents the race).
-_recalc_locks: dict = {}
-_recalc_locks_guard = threading.Lock()
 
 
 def _get_tournament(tid):
@@ -378,25 +364,19 @@ def recalculate_tournament(tournament_id: str) -> tuple[int, int, int]:
     in chronological order. Use after correcting votes or when a new player
     joins mid-tournament.
 
-    Serialized per tournament_id (see _recalc_locks) — raises RuntimeError
-    if a recalculation for this tournament is already in progress, rather
-    than letting two overlapping runs race on the same match_players data.
+    Serialized per tournament_id (see data/tournament_lock.py) — raises
+    RuntimeError if another mutating operation for this tournament (quit,
+    reinstate, save-result, miss floor, rebuild) is already in progress,
+    rather than letting two overlapping runs race on the same
+    match_players data.
 
     Returns (recalculated_count, abandoned_count, error_count).
     """
-    with _recalc_locks_guard:
-        if _recalc_locks.get(tournament_id):
-            raise RuntimeError(
-                f"A recalculation for {tournament_id} is already in progress — "
-                "please wait for it to finish before trying again."
-            )
-        _recalc_locks[tournament_id] = True
-
-    try:
-        from data.match_players import rebuild_for_tournament
+    with tournament_lock(tournament_id, "recalculate tournament"):
+        from data.match_players import migrate_from_votes
         from data.db import get_matches
 
-        rebuild_for_tournament(tournament_id)
+        migrate_from_votes(tournament_id=tournament_id)
 
         all_ms = get_matches(tournament_id)
         done = sorted(
@@ -437,9 +417,6 @@ def recalculate_tournament(tournament_id: str) -> tuple[int, int, int]:
             except Exception:
                 errors += 1
         return recalc, abandoned, errors
-    finally:
-        with _recalc_locks_guard:
-            _recalc_locks.pop(tournament_id, None)
 
 
 def apply_match_result(match_id: str, tournament_id: str, winner: str) -> dict:
@@ -448,20 +425,24 @@ def apply_match_result(match_id: str, tournament_id: str, winner: str) -> dict:
     for this match, calculate points, and persist (or mark abandoned if
     there's no valid contest).
 
+    Serialized per tournament_id (see data/tournament_lock.py) — same
+    reasoning as recalculate_tournament.
+
     Returns {"abandoned": bool, "records": list[dict] | None,
              "correct_voters": int | None} — callers decide their own
     UI/response feedback and whether to trigger emails.
     """
-    from data.match_players import rebuild_for_match
-    from data.db import mark_match_abandoned, update_match_result
+    with tournament_lock(tournament_id, "save result"):
+        from data.match_players import rebuild_for_match
+        from data.db import mark_match_abandoned, update_match_result
 
-    rebuild_for_match(match_id, tournament_id)
-    records = run_points_calculation(match_id, tournament_id, winner)
+        rebuild_for_match(match_id, tournament_id)
+        records = run_points_calculation(match_id, tournament_id, winner)
 
-    if records is ABANDONED:
-        mark_match_abandoned(match_id)
-        return {"abandoned": True, "records": None, "correct_voters": None}
+        if records is ABANDONED:
+            mark_match_abandoned(match_id)
+            return {"abandoned": True, "records": None, "correct_voters": None}
 
-    update_match_result(match_id, winner)
-    correct = sum(1 for r in records if r.get("total_points", 0) > 0)
-    return {"abandoned": False, "records": records, "correct_voters": correct}
+        update_match_result(match_id, winner)
+        correct = sum(1 for r in records if r.get("total_points", 0) > 0)
+        return {"abandoned": False, "records": records, "correct_voters": correct}

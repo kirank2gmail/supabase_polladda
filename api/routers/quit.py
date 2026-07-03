@@ -73,13 +73,19 @@ def quit_status(tournament_id: str, admin: dict = Depends(require_admin)):
 
 @router.post("/tournaments/{tournament_id}/quit")
 def mark_quit(tournament_id: str, body: QuitRequest, admin: dict = Depends(require_admin)):
-    n = quit_player(body.user_id, tournament_id, body.from_match_id)
+    try:
+        n = quit_player(body.user_id, tournament_id, body.from_match_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return {"updated": n}
 
 
 @router.post("/tournaments/{tournament_id}/reinstate")
 def reinstate(tournament_id: str, body: QuitRequest, admin: dict = Depends(require_admin)):
-    n = reinstate_player(body.user_id, tournament_id, body.from_match_id)
+    try:
+        n = reinstate_player(body.user_id, tournament_id, body.from_match_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return {"removed": n}
 
 
@@ -101,11 +107,17 @@ def miss_floor_status(tournament_id: str, admin: dict = Depends(require_admin)):
 def apply_floor(
     tournament_id: str, body: MissFloorApplyRequest, admin: dict = Depends(require_admin)
 ):
-    n = apply_miss_floor(tournament_id, body.from_match_id)
+    try:
+        n = apply_miss_floor(tournament_id, body.from_match_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return {"written": n}
 
 
 @router.delete("/tournaments/{tournament_id}/miss-floor")
 def remove_floor(tournament_id: str, admin: dict = Depends(require_admin)):
-    n = remove_miss_floor(tournament_id)
+    try:
+        n = remove_miss_floor(tournament_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return {"removed": n}
