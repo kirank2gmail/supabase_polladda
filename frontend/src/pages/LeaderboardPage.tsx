@@ -4,6 +4,8 @@ import type { LeaderboardResponse, Tournament } from "../api/types";
 import { LeaderboardTable } from "../components/LeaderboardTable";
 import { HeroCards } from "../components/HeroCards";
 import { PenaltiesTable } from "../components/PenaltiesTable";
+import { MatchDetailsSection } from "../components/MatchDetailsSection";
+import { buildLeaderboardCsv, downloadCsv } from "../lib/csvExport";
 
 export function LeaderboardPage() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
@@ -65,7 +67,16 @@ export function LeaderboardPage() {
           <HeroCards heroes={data.heroes} />
           <h2 className="mb-2 text-lg font-bold">📊 Leaderboard</h2>
           <LeaderboardTable data={data} />
+          <button
+            onClick={() =>
+              downloadCsv(`leaderboard_${selected}.csv`, buildLeaderboardCsv(data))
+            }
+            className="mt-3 rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
+          >
+            ⬇️ Download CSV
+          </button>
           <PenaltiesTable penalties={data.penalties} />
+          <MatchDetailsSection data={data} />
         </>
       )}
     </div>
