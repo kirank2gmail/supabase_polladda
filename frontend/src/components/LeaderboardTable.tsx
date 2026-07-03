@@ -50,9 +50,13 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
         <table className="w-full border-collapse text-sm whitespace-nowrap">
           <thead>
             <tr className="bg-[#28324f] text-white">
-              <th className="px-3 py-2 text-center">#</th>
-              <th className="px-3 py-2 text-left">Player</th>
-              <th className="px-3 py-2 text-right">Points</th>
+              <th className="sticky left-0 z-10 w-12 bg-[#28324f] px-3 py-2 text-center">#</th>
+              <th className="sticky left-12 z-10 w-[160px] bg-[#28324f] px-3 py-2 text-left">
+                Player
+              </th>
+              <th className="sticky left-[208px] z-10 w-[90px] border-r-2 border-gray-300 bg-[#28324f] px-3 py-2 text-right">
+                Points
+              </th>
               <th className="px-3 py-2 text-right">Win%</th>
               <th className="px-3 py-2 text-right">Missed</th>
               {labels.map((lbl, i) => (
@@ -66,23 +70,25 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
             {rows.map((row, i) => {
               const pts = Number(row.total_points);
               const rowBg = i % 2 === 1 ? "bg-gray-50" : "bg-white";
-              const ptsBg = pts >= 0 ? "bg-[#d1f0d7]" : "bg-[#fcd7d7]";
               const ptsFg = pts >= 0 ? "text-[#0e6e24]" : "text-[#a01414]";
               const ptsStr = pts >= 0 ? `+${pts.toFixed(2)}` : pts.toFixed(2);
               const missed = Number(row.missed);
-              const missBg = missed > 0 ? "bg-[#fff3cd]" : "";
               const missFg = missed > 0 ? "text-[#8c5500]" : "text-gray-900";
 
               return (
                 <tr key={row.user_id} className={rowBg}>
-                  <td className="border-b border-gray-200 px-3 py-2 text-center">
+                  <td
+                    className={`sticky left-0 z-10 w-12 border-b border-gray-200 px-3 py-2 text-center ${rowBg}`}
+                  >
                     {i < 3 ? MEDALS[i] : i + 1}
                   </td>
-                  <td className="border-b border-gray-200 px-3 py-2 font-semibold">
+                  <td
+                    className={`sticky left-12 z-10 w-[160px] overflow-hidden text-ellipsis border-b border-gray-200 px-3 py-2 font-semibold ${rowBg}`}
+                  >
                     {row.name}
                   </td>
                   <td
-                    className={`border-b border-gray-200 px-3 py-2 text-right font-bold ${ptsBg} ${ptsFg}`}
+                    className={`sticky left-[208px] z-10 w-[90px] border-b border-gray-200 border-r-2 border-r-gray-300 px-3 py-2 text-right font-bold ${rowBg} ${ptsFg}`}
                   >
                     {ptsStr}
                   </td>
@@ -90,18 +96,18 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
                     {Number(row.win_pct).toFixed(0)}%
                   </td>
                   <td
-                    className={`border-b border-gray-200 px-3 py-2 text-right font-semibold ${missBg} ${missFg}`}
+                    className={`border-b border-gray-200 px-3 py-2 text-right font-semibold ${missFg}`}
                   >
                     {missed}
                   </td>
                   {data.col_match_ids.map((mid) => {
                     const val = row[mid] ?? null;
-                    const { fg, bg } = cellColours(val as never);
+                    const { fg } = cellColours(val as never);
                     return (
                       <td
                         key={mid}
                         className="border-b border-gray-200 px-3 py-2 text-right font-semibold"
-                        style={{ color: fg, background: bg ?? undefined }}
+                        style={{ color: fg }}
                       >
                         {cellText(val as never)}
                       </td>
@@ -113,10 +119,10 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-[#28324f] bg-[#f0f4ff] font-bold">
-              <td className="px-3 py-2 text-center">—</td>
-              <td className="px-3 py-2">Total</td>
+              <td className="sticky left-0 z-10 w-12 bg-[#f0f4ff] px-3 py-2 text-center">—</td>
+              <td className="sticky left-12 z-10 w-[160px] bg-[#f0f4ff] px-3 py-2">Total</td>
               <td
-                className={`px-3 py-2 text-right ${
+                className={`sticky left-[208px] z-10 w-[90px] border-r-2 border-gray-300 bg-[#f0f4ff] px-3 py-2 text-right ${
                   data.grand_total >= 0 ? "text-[#0e6e24]" : "text-[#a01414]"
                 }`}
               >

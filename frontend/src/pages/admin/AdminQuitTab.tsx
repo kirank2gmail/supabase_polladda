@@ -207,7 +207,7 @@ function QuitForm({
         </select>
         <button
           onClick={handleQuit}
-          className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+          className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Mark as Quit
         </button>
@@ -289,7 +289,7 @@ function ReinstateForm({
         </select>
         <button
           onClick={handleReinstate}
-          className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+          className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Reinstate
         </button>
@@ -363,7 +363,7 @@ function MissFloorSection({
           </select>
           <button
             onClick={handleApply}
-            className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+            className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
           >
             Apply Miss Floor
           </button>

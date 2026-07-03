@@ -135,7 +135,7 @@ export function AdminTournamentsTab() {
         {createError && <p className="col-span-2 text-sm text-red-600">{createError}</p>}
         <button
           onClick={handleCreate}
-          className="col-span-2 rounded bg-purple-600 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+          className="col-span-2 rounded bg-[#28324f] py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Create Tournament
         </button>

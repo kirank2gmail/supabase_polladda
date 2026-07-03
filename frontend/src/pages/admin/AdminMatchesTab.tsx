@@ -69,7 +69,7 @@ export function AdminMatchesTab() {
         <button
           onClick={() => setMode("single")}
           className={`rounded px-3 py-1.5 text-sm font-medium ${
-            mode === "single" ? "bg-purple-600 text-white" : "border border-gray-300"
+            mode === "single" ? "bg-[#28324f] text-white" : "border border-gray-300"
           }`}
         >
           ➕ Add Single Match
@@ -77,7 +77,7 @@ export function AdminMatchesTab() {
         <button
           onClick={() => setMode("bulk")}
           className={`rounded px-3 py-1.5 text-sm font-medium ${
-            mode === "bulk" ? "bg-purple-600 text-white" : "border border-gray-300"
+            mode === "bulk" ? "bg-[#28324f] text-white" : "border border-gray-300"
           }`}
         >
           📤 Bulk Upload CSV
@@ -91,12 +91,14 @@ export function AdminMatchesTab() {
       )}
 
       <h2 className="mb-3 mt-6 text-lg font-bold">Matches</h2>
-      <div className="space-y-3">
-        {matches.length === 0 && <p className="text-gray-500">No matches yet.</p>}
-        {matches.map((m) => (
-          <MatchRow key={m.match_id} match={m} onDeleted={reloadMatches} />
-        ))}
-      </div>
+      {matches.length === 0 && <p className="text-gray-500">No matches yet.</p>}
+      {matches.length > 0 && (
+        <div className="max-h-80 space-y-3 overflow-y-auto rounded-md border border-gray-200 p-2">
+          {matches.map((m) => (
+            <MatchRow key={m.match_id} match={m} onDeleted={reloadMatches} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -258,7 +260,7 @@ function SingleMatchForm({
 
       <button
         onClick={handleSubmit}
-        className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+        className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
       >
         Add Match
       </button>
@@ -361,7 +363,7 @@ function BulkUploadForm({
       <button
         onClick={handleImport}
         disabled={!file}
-        className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+        className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439] disabled:opacity-50"
       >
         Import All
       </button>
@@ -404,7 +406,7 @@ function MatchRow({ match, onDeleted }: { match: MatchOut; onDeleted: () => void
             {match.poll_mode} · Status: {match.status}
             {match.result ? ` · Result: ${match.result}` : ""}
           </p>
-          <button onClick={toggleVotes} className="mt-1 text-xs text-purple-600 hover:underline">
+          <button onClick={toggleVotes} className="mt-1 text-xs text-[#28324f] hover:underline">
             👁 {showVotes ? "Hide votes" : "View votes"}
           </button>
         </div>

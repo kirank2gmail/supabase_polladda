@@ -72,19 +72,19 @@ export function LoginPage() {
               placeholder="New password (min 6 chars)"
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
-              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-[#28324f] focus:outline-none"
             />
             <input
               type="password"
               placeholder="Confirm new password"
               value={newPw2}
               onChange={(e) => setNewPw2(e.target.value)}
-              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-[#28324f] focus:outline-none"
             />
             {pwError && <p className="text-sm text-red-600">{pwError}</p>}
             <button
               type="submit"
-              className="w-full rounded bg-purple-600 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+              className="w-full rounded bg-[#28324f] py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
             >
               Set Password
             </button>
@@ -107,20 +107,20 @@ export function LoginPage() {
             placeholder="Enter your username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-[#28324f] focus:outline-none"
           />
           <input
             type="password"
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none"
+            className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-[#28324f] focus:outline-none"
           />
           {error && <p className="text-sm text-red-600">{error}</p>}
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded bg-purple-600 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+            className="w-full rounded bg-[#28324f] py-2 text-sm font-semibold text-white hover:bg-[#1c2439] disabled:opacity-50"
           >
             {submitting ? "Signing in…" : "Sign In"}
           </button>

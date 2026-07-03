@@ -142,7 +142,7 @@ function Section({
       {children.length === 0 ? (
         <p className="text-sm text-gray-500">{emptyLabel}</p>
       ) : (
-        <div className="max-h-[460px] divide-y divide-gray-100 overflow-y-auto rounded-md border border-gray-200 p-2">
+        <div className="max-h-80 divide-y divide-gray-100 overflow-y-auto rounded-md border border-gray-200 p-2">
           {children}
         </div>
       )}

@@ -70,18 +70,15 @@ export function MatchDetailsSection({ data }: { data: LeaderboardResponse }) {
               {match.result ? `Result: ${match.result}` : match.status}
             </span>
           </div>
-          <div className="max-h-48 overflow-auto">
+          <div className="max-h-80 overflow-auto">
             <table className="w-full border-collapse text-sm">
               <tbody>
                 {breakdown.map(({ name, val }) => {
-                  const { fg, bg } = cellColours(val as never);
+                  const { fg } = cellColours(val as never);
                   return (
                     <tr key={name} className="border-b border-gray-100">
                       <td className="px-2 py-1 font-medium">{name}</td>
-                      <td
-                        className="px-2 py-1 text-right font-semibold"
-                        style={{ color: fg, background: bg ?? undefined }}
-                      >
+                      <td className="px-2 py-1 text-right font-semibold" style={{ color: fg }}>
                         {cellText(val as never)}
                       </td>
                     </tr>

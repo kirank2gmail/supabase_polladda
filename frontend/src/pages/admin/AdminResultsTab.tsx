@@ -111,7 +111,7 @@ export function AdminResultsTab() {
         <button
           onClick={handleRecalculate}
           disabled={recalculating}
-          className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+          className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439] disabled:opacity-50"
         >
           {recalculating ? "Recalculating…" : "Recalculate Tournament"}
         </button>
@@ -136,29 +136,35 @@ export function AdminResultsTab() {
       <h2 className="mb-2 text-lg font-bold">🎯 Awaiting Result Entry</h2>
       <p className="mb-2 text-sm text-gray-500">Poll closed — enter the winner to calculate points.</p>
       {pending.length === 0 && <p className="mb-4 text-gray-400">No matches awaiting result.</p>}
-      <div className="mb-6 space-y-2">
-        {pending.map((m) => (
-          <ResultEntryRow key={m.match_id} match={m} onSaved={reload} />
-        ))}
-      </div>
+      {pending.length > 0 && (
+        <div className="mb-6 max-h-80 space-y-2 overflow-y-auto rounded-md border border-gray-200 p-2">
+          {pending.map((m) => (
+            <ResultEntryRow key={m.match_id} match={m} onSaved={reload} />
+          ))}
+        </div>
+      )}
 
       <h2 className="mb-2 text-lg font-bold">⏳ Voting Still Open</h2>
       <p className="mb-2 text-sm text-gray-500">Results cannot be entered until voting closes.</p>
       {stillOpen.length === 0 && <p className="mb-4 text-gray-400">No matches with open voting.</p>}
-      <div className="mb-6 space-y-2">
-        {stillOpen.map((m) => (
-          <StillOpenRow key={m.match_id} match={m} />
-        ))}
-      </div>
+      {stillOpen.length > 0 && (
+        <div className="mb-6 max-h-80 space-y-2 overflow-y-auto rounded-md border border-gray-200 p-2">
+          {stillOpen.map((m) => (
+            <StillOpenRow key={m.match_id} match={m} />
+          ))}
+        </div>
+      )}
 
       <h2 className="mb-2 text-lg font-bold">✏️ Update / Correct Result</h2>
       <p className="mb-2 text-sm text-gray-500">Change the result for a match — points recalculate automatically.</p>
       {done.length === 0 && <p className="mb-4 text-gray-400">No completed matches.</p>}
-      <div className="mb-6 space-y-2">
-        {done.map((m) => (
-          <UpdateResultRow key={m.match_id} match={m} onSaved={reload} />
-        ))}
-      </div>
+      {done.length > 0 && (
+        <div className="mb-6 max-h-80 space-y-2 overflow-y-auto rounded-md border border-gray-200 p-2">
+          {done.map((m) => (
+            <UpdateResultRow key={m.match_id} match={m} onSaved={reload} />
+          ))}
+        </div>
+      )}
 
       <PenaltiesSection
         tournamentId={selected}
@@ -215,7 +221,7 @@ function ResultEntryRow({ match, onSaved }: { match: MatchOut; onSaved: () => vo
         <button
           onClick={handleSave}
           disabled={saving}
-          className="rounded bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+          className="rounded bg-[#28324f] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#1c2439] disabled:opacity-50"
         >
           Save Result
         </button>
@@ -287,7 +293,7 @@ function UpdateResultRow({ match, onSaved }: { match: MatchOut; onSaved: () => v
       <button
         onClick={handleUpdate}
         disabled={!changed || saving}
-        className="rounded bg-purple-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:opacity-50"
+        className="rounded bg-[#28324f] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#1c2439] disabled:opacity-50"
       >
         Update Result
       </button>
@@ -362,7 +368,7 @@ function PenaltiesSection({
         />
         <button
           onClick={handleAdd}
-          className="rounded bg-purple-600 px-3 py-2 text-sm font-semibold text-white hover:bg-purple-700"
+          className="rounded bg-[#28324f] px-3 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Add Penalty
         </button>
@@ -372,7 +378,7 @@ function PenaltiesSection({
       {penalties.length === 0 ? (
         <p className="text-gray-400">No penalties recorded for this tournament.</p>
       ) : (
-        <div className="space-y-1">
+        <div className="max-h-80 space-y-1 overflow-y-auto rounded-md border border-gray-200 p-2">
           {penalties.map((p) => (
             <div
               key={p.penalty_id}

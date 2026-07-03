@@ -6,7 +6,7 @@ export function Navbar() {
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `rounded px-3 py-1.5 text-sm font-medium ${
-      isActive ? "bg-purple-600 text-white" : "text-gray-600 hover:bg-gray-100"
+      isActive ? "bg-[#28324f] text-white" : "text-gray-600 hover:bg-gray-100"
     }`;
 
   return (
