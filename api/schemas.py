@@ -153,6 +153,7 @@ class MatchOut(BaseModel):
     result: str
     created_by: str | None = None
     created_at: str | None = None
+    is_voting_open: bool = False
 
 
 class VoteOut(BaseModel):
@@ -175,3 +176,71 @@ class BulkImportSkip(BaseModel):
 class BulkImportResult(BaseModel):
     created: int
     skipped: list[BulkImportSkip]
+
+
+# ── Admin: results ────────────────────────────────────────────────────────────
+
+class RecalculateResult(BaseModel):
+    recalculated: int
+    abandoned: int
+    errors: int
+
+
+class RebuildResult(BaseModel):
+    written: int
+
+
+class MatchResultRequest(BaseModel):
+    tournament_id: str
+    winner: str
+
+
+class MatchResultResponse(BaseModel):
+    abandoned: bool
+    correct_voters: int | None = None
+    email_sent: bool
+    email_error: str | None = None
+
+
+class PenaltyCreateRequest(BaseModel):
+    user_id: str
+    points: float
+    reason: str
+
+
+# ── Admin: player quit / miss floor ──────────────────────────────────────────
+
+class PlayerStatusOut(BaseModel):
+    user_id: str
+    name: str
+    has_quit_records: bool
+    quit_from_match_id: str | None = None
+    quit_since_label: str | None = None
+    active_matches: int
+    quit_matches: int
+
+
+class MatchLabelOut(BaseModel):
+    match_id: str
+    label: str
+
+
+class QuitStatusResponse(BaseModel):
+    players: list[PlayerStatusOut]
+    matches: list[MatchLabelOut]
+
+
+class QuitRequest(BaseModel):
+    user_id: str
+    from_match_id: str
+
+
+class MissFloorStatus(BaseModel):
+    from_match_id: str
+    player_count: int
+    record_count: int
+    label: str
+
+
+class MissFloorApplyRequest(BaseModel):
+    from_match_id: str

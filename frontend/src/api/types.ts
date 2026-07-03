@@ -85,6 +85,7 @@ export interface MatchOut {
   result: string;
   created_by: string | null;
   created_at: string | null;
+  is_voting_open: boolean;
 }
 
 export interface LeaderboardResponse {
@@ -134,4 +135,52 @@ export interface MatchCreateRequest {
   scoring_mode?: string;
   fixed_odds?: number;
   poll_mode?: string;
+}
+
+// ── Results ───────────────────────────────────────────────────────────────────
+
+export interface RecalculateResult {
+  recalculated: number;
+  abandoned: number;
+  errors: number;
+}
+
+export interface RebuildResult {
+  written: number;
+}
+
+export interface MatchResultResponse {
+  abandoned: boolean;
+  correct_voters: number | null;
+  email_sent: boolean;
+  email_error: string | null;
+}
+
+// ── Player quit / miss floor ─────────────────────────────────────────────────
+
+export interface PlayerStatusOut {
+  user_id: string;
+  name: string;
+  has_quit_records: boolean;
+  quit_from_match_id: string | null;
+  quit_since_label: string | null;
+  active_matches: number;
+  quit_matches: number;
+}
+
+export interface MatchLabelOut {
+  match_id: string;
+  label: string;
+}
+
+export interface QuitStatusResponse {
+  players: PlayerStatusOut[];
+  matches: MatchLabelOut[];
+}
+
+export interface MissFloorStatus {
+  from_match_id: string;
+  player_count: number;
+  record_count: number;
+  label: string;
 }

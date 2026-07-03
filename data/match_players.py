@@ -539,24 +539,22 @@ def apply_miss_floor(tournament_id: str, from_match_id: str) -> int:
     Max out the free-miss allowance for all active players from
     from_match_id onwards.
 
-    Writes `allowed_misses` synthetic match_players records per player,
-    all with:
+    Writes ONE synthetic match_players record per player, with:
       status = "missed"
       note   = "miss_floor"
       match_id = from_match_id   (sorts before the knockout stage)
 
-    _count_prior_misses counts these normally, so the very first real
-    miss in the knockout stage is already beyond the threshold and is
-    penalised.  _build_records_for_match skips (uid, from_match_id)
+    _count_prior_misses only checks whether a miss_floor record *exists* at
+    or before this match (via a set of match_ids), not how many there are —
+    see data/points.py::_count_prior_misses — so one record per player is
+    sufficient and satisfies the match_players_user_match_uniq UNIQUE(user_id,
+    match_id) constraint (multiple rows per player at the same match_id
+    would violate it). _build_records_for_match skips (uid, from_match_id)
     pairs that already have a miss_floor record, so rebuild is safe.
 
-    Returns the number of synthetic records written.
+    Returns the number of synthetic records written (one per active player).
     """
     sb = get_client()
-
-    tournament     = next((t for t in read_table("tournaments")
-                           if t["tournament_id"] == tournament_id), None)
-    allowed_misses = int((tournament or {}).get("allowed_misses", 3))
 
     existing_mp = select_all(lambda: sb.table("match_players").select("*")
                               .eq("tournament_id", tournament_id))
@@ -572,20 +570,20 @@ def apply_miss_floor(tournament_id: str, from_match_id: str) -> int:
     sb.table("match_players").delete() \
         .eq("tournament_id", tournament_id).eq("note", "miss_floor").execute()
 
-    new_records: list[dict] = []
-    for uid in active_uids:
-        for _ in range(allowed_misses):
-            new_records.append({
-                "mp_id"        : _uid(),
-                "match_id"     : from_match_id,
-                "tournament_id": tournament_id,
-                "user_id"      : uid,
-                "status"       : "missed",
-                "vote"         : "",
-                "quit_at"      : "",
-                "note"         : "miss_floor",
-                "created_at"   : _now(),
-            })
+    new_records: list[dict] = [
+        {
+            "mp_id"        : _uid(),
+            "match_id"     : from_match_id,
+            "tournament_id": tournament_id,
+            "user_id"      : uid,
+            "status"       : "missed",
+            "vote"         : "",
+            "quit_at"      : "",
+            "note"         : "miss_floor",
+            "created_at"   : _now(),
+        }
+        for uid in active_uids
+    ]
 
     for i in range(0, len(new_records), 500):
         sb.table("match_players").insert(new_records[i:i + 500]).execute()

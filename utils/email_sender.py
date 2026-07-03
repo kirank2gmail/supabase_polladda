@@ -661,3 +661,42 @@ def _send(subject: str, html_body: str,
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(sender, app_password)
         server.sendmail(sender, recipient, msg.as_string())
+
+
+# ── Result email orchestration ───────────────────────────────────────────────
+
+def send_result_emails(match: dict, result: str,
+                       tournament_id: str, point_records: list[dict]):
+    """
+    Build and send both emails after a result is saved:
+      1. Poll results (votes + calculated win amounts)
+      2. Leaderboard (full lb + last 5 match columns)
+
+    Raises on failure — framework-agnostic, callers decide their own
+    UI/response feedback (Streamlit shows a warning/toast; the API returns
+    an email_error field instead of failing the request).
+    """
+    from data.db import get_votes, get_all_users, get_display_name, get_tournament
+
+    tournament    = get_tournament(tournament_id) or {}
+    t_name        = tournament.get("name", tournament_id)
+    options       = [o.strip() for o in match["options"].split("|") if o.strip()]
+    votes         = get_votes(match_id=match["match_id"])
+    all_users     = get_all_users()
+    display_names = {u["user_id"]: get_display_name(u["user_id"])
+                     for u in all_users}
+
+    # ── Win amounts per option ────────────────────────────────────────────────
+    winner_pts = next(
+        (float(r["total_points"]) for r in point_records
+         if r.get("total_points", 0) > 0), 0.0
+    )
+    win_amounts = {}
+    for opt in options:
+        if opt == result:
+            win_amounts[opt] = f"+{winner_pts:.2f} pts"
+        else:
+            win_amounts[opt] = "−1 pt"
+
+    send_poll_results(match, votes, win_amounts, display_names, t_name)
+    send_leaderboard(match, result, tournament_id, t_name)

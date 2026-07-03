@@ -329,3 +329,66 @@ def run_points_calculation(match_id: str, tournament_id: str,
     if records:
         save_points_batch(records)
     return records
+
+
+def recalculate_tournament(tournament_id: str) -> tuple[int, int, int]:
+    """
+    Rebuild match_players then recalculate points for all completed matches
+    in chronological order. Use after correcting votes or when a new player
+    joins mid-tournament.
+
+    Returns (recalculated_count, abandoned_count, error_count).
+    """
+    from data.match_players import rebuild_for_tournament
+    from data.db import get_matches
+
+    rebuild_for_tournament(tournament_id)
+
+    all_ms = get_matches(tournament_id)
+    done = sorted(
+        [m for m in all_ms
+         if m.get("tournament_id") == tournament_id
+         and m["status"] in ("completed", "abandoned")
+         and m.get("result") not in ("", None)],
+        key=lambda m: m["match_date"] + " " + m["start_time"]
+    )
+    recalc = abandoned = errors = 0
+    for m in done:
+        if m.get("status") == "abandoned" and m.get("result") == "abandoned":
+            delete_match_points(m["match_id"])
+            abandoned += 1
+            continue
+        try:
+            result = run_points_calculation(m["match_id"], tournament_id, m.get("result", ""))
+            if result is ABANDONED:
+                abandoned += 1
+            else:
+                recalc += 1
+        except Exception:
+            errors += 1
+    return recalc, abandoned, errors
+
+
+def apply_match_result(match_id: str, tournament_id: str, winner: str) -> dict:
+    """
+    Shared logic for saving/correcting a match result: rebuild match_players
+    for this match, calculate points, and persist (or mark abandoned if
+    there's no valid contest).
+
+    Returns {"abandoned": bool, "records": list[dict] | None,
+             "correct_voters": int | None} — callers decide their own
+    UI/response feedback and whether to trigger emails.
+    """
+    from data.match_players import rebuild_for_match
+    from data.db import mark_match_abandoned, update_match_result
+
+    rebuild_for_match(match_id, tournament_id)
+    records = run_points_calculation(match_id, tournament_id, winner)
+
+    if records is ABANDONED:
+        mark_match_abandoned(match_id)
+        return {"abandoned": True, "records": None, "correct_voters": None}
+
+    update_match_result(match_id, winner)
+    correct = sum(1 for r in records if r.get("total_points", 0) > 0)
+    return {"abandoned": False, "records": records, "correct_voters": correct}

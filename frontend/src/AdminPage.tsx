@@ -3,12 +3,15 @@ import { useAuth } from "./context/AuthContext";
 import { AdminUsersTab } from "./pages/admin/AdminUsersTab";
 import { AdminTournamentsTab } from "./pages/admin/AdminTournamentsTab";
 import { AdminMatchesTab } from "./pages/admin/AdminMatchesTab";
+import { AdminResultsTab } from "./pages/admin/AdminResultsTab";
+import { AdminQuitTab } from "./pages/admin/AdminQuitTab";
 
 const TABS = [
   { key: "users", label: "👥 Users" },
   { key: "tournaments", label: "🏆 Tournaments" },
   { key: "matches", label: "📋 Matches" },
-  // Results and Player Quit tabs land in Milestone 2b.
+  { key: "results", label: "🎯 Results" },
+  { key: "quit", label: "🚪 Player Quit" },
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
@@ -41,6 +44,8 @@ export default function AdminPage() {
       {tab === "users" && <AdminUsersTab />}
       {tab === "tournaments" && <AdminTournamentsTab />}
       {tab === "matches" && <AdminMatchesTab />}
+      {tab === "results" && <AdminResultsTab />}
+      {tab === "quit" && <AdminQuitTab />}
     </div>
   );
 }

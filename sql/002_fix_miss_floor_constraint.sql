@@ -1,0 +1,21 @@
+-- SportsPoll — fix for the miss-floor feature
+--
+-- The original schema-setup script (sql/supabase_schema_updates.sql) added
+-- UNIQUE(user_id, match_id) on match_players, based on the assumption that
+-- there's always exactly one match_players row per (user, match) pair.
+--
+-- That assumption is wrong: data/match_players.py::apply_miss_floor() writes
+-- a synthetic "missed" record anchored at an existing match_id (the
+-- knockout-stage boundary match) so it sorts correctly — and that boundary
+-- match already has a REAL match_players row (voted/missed/quit) for every
+-- active player. The synthetic row and the real row legitimately coexist at
+-- the same (user_id, match_id) pair, distinguished by mp_id and note.
+--
+-- Nothing in the codebase relies on this constraint for upsert conflict
+-- resolution (grep for on_conflict — only "votes" uses it; match_players
+-- writes are all targeted .eq("mp_id", ...) updates or scoped
+-- deletes/inserts), so it's safe to drop.
+--
+-- Run this once in the Supabase SQL editor.
+
+ALTER TABLE match_players DROP CONSTRAINT IF EXISTS match_players_user_match_uniq;

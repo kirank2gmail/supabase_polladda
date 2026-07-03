@@ -11,22 +11,17 @@ from data.db import (
     get_all_users, create_user, delete_user, set_user_role,
     get_display_name, change_password,
     get_tournaments, create_tournament, update_tournament_status, delete_tournament,
-    get_matches, create_match, bulk_create_matches,
-    update_match_result, delete_match,
+    get_matches, create_match, bulk_create_matches, delete_match,
     get_votes, delete_vote, get_user_by_id, verify_password,
-    get_penalties, add_penalty, delete_penalty, delete_match_points,
+    get_penalties, add_penalty, delete_penalty,
 )
-from data.points import run_points_calculation, ABANDONED
-from data.db    import mark_match_abandoned
+from data.points import recalculate_tournament, apply_match_result
 from data.match_players import (
-    rebuild_for_match, rebuild_for_tournament,
     quit_player, reinstate_player, get_player_quit_status,
     apply_miss_floor, remove_miss_floor, get_miss_floor_status,
     _match_ist_label,
 )
-from utils.email_sender import (
-    send_poll_results, send_leaderboard, email_configured
-)
+from utils.email_sender import send_result_emails, email_configured
 from utils.timezone import COMMON_TIMEZONES, get_match_cutoff_utc, is_voting_open, format_ts
 from utils.match_helpers import (
     parse_time as _parse_time,
@@ -450,68 +445,37 @@ def _single_form(tid: str, user: dict):
 # ── Results ───────────────────────────────────────────────────────────────────
 
 def _recalculate_tournament(sel_tid: str):
-    """
-    Rebuild match_players then recalculate points for all completed matches.
-    match_players is rebuilt fresh from votes.json + registrations.json first,
-    so points calculation reads a complete, accurate table with no cache.
-    Returns tuple (recalc_count, abandoned_count, error_count).
-    """
-    # Step 1: rebuild match_players from scratch
-    rebuild_for_tournament(sel_tid)
-
-    # Step 2: recalculate points using match_players
-    all_ms = get_matches(sel_tid)
-    done   = sorted(
-        [m for m in all_ms
-         if m.get("tournament_id") == sel_tid
-         and m["status"] in ("completed", "abandoned")
-         and m.get("result") not in ("", None)],
-        key=lambda m: m["match_date"] + " " + m["start_time"]
-    )
-    recalc = abandoned = errors = 0
-    for m in done:
-        if m.get("status") == "abandoned" and m.get("result") == "abandoned":
-            delete_match_points(m["match_id"])
-            abandoned += 1
-            continue
-        try:
-            result = run_points_calculation(
-                m["match_id"], sel_tid, m.get("result", ""))
-            if result is ABANDONED:
-                abandoned += 1
-            else:
-                recalc += 1
-        except Exception as e:
-            errors += 1
-    return recalc, abandoned, errors
+    """Thin wrapper around data.points.recalculate_tournament (shared with the API)."""
+    return recalculate_tournament(sel_tid)
 
 
 def _apply_result(match: dict, winner: str, sel_tid: str):
     """
-    Shared logic for Save Result and Update Result:
-      rebuild match_players → calculate points → persist → email.
-    Calls st.rerun() on completion so the caller never needs to.
+    Shared logic for Save Result and Update Result — delegates to
+    data.points.apply_match_result (shared with the API), then renders the
+    same UI feedback as before and calls st.rerun() on completion.
     """
     with st.spinner("Calculating points..."):
-        rebuild_for_match(match["match_id"], sel_tid)
-        records = run_points_calculation(match["match_id"], sel_tid, winner)
+        outcome = apply_match_result(match["match_id"], sel_tid, winner)
 
-    if records is ABANDONED:
-        mark_match_abandoned(match["match_id"])
+    if outcome["abandoned"]:
         st.warning(
             f"**{match['title']}** has no votes — "
             "marked as abandoned. No points calculated."
         )
     else:
-        update_match_result(match["match_id"], winner)
-        correct = sum(1 for r in records if r.get("total_points", 0) > 0)
         st.success(
-            f"**{winner}** won — {correct} correct voter(s). "
+            f"**{winner}** won — {outcome['correct_voters']} correct voter(s). "
             "Points saved."
         )
         if email_configured():
             with st.spinner("Sending emails..."):
-                _send_result_emails(match, winner, sel_tid, records)
+                try:
+                    send_result_emails(match, winner, sel_tid, outcome["records"])
+                    st.toast("📧 Poll results email sent!", icon="✅")
+                    st.toast("📧 Leaderboard email sent!", icon="✅")
+                except Exception as e:
+                    st.warning(f"Email failed: {e}", icon="⚠️")
 
     st.rerun()
 
@@ -939,53 +903,3 @@ def _quit_tab():
                     "Run **Recalculate Tournament** to apply to points."
                 )
                 st.rerun()
-
-
-# ── Email helper ──────────────────────────────────────────────────────────────
-
-def _send_result_emails(match: dict, result: str,
-                        tournament_id: str, point_records: list[dict]):
-    """
-    Build and send both emails after result is saved:
-      1. Poll results (votes + calculated win amounts)
-      2. Leaderboard (full lb + last 5 match columns)
-    Errors shown as warnings — never block the UI.
-    """
-    try:
-        from data.db import (
-            get_votes, get_all_users, get_display_name,
-            get_tournament
-        )
-
-        tournament    = get_tournament(tournament_id) or {}
-        t_name        = tournament.get("name", tournament_id)
-        options       = [o.strip() for o in match["options"].split("|") if o.strip()]
-        votes         = get_votes(match_id=match["match_id"])
-        all_users     = get_all_users()
-        display_names = {u["user_id"]: get_display_name(u["user_id"])
-                         for u in all_users}
-
-        # ── Win amounts per option ────────────────────────────────────────────
-        # From point_records: find what winners got
-        winner_pts = next(
-            (float(r["total_points"]) for r in point_records
-             if r.get("total_points", 0) > 0), 0.0
-        )
-        win_amounts = {}
-        for opt in options:
-            if opt == result:
-                win_amounts[opt] = f"+{winner_pts:.2f} pts"
-            else:
-                win_amounts[opt] = "−1 pt"
-
-        # ── Email 1: poll results ─────────────────────────────────────────────
-        send_poll_results(match, votes, win_amounts, display_names, t_name)
-        st.toast("📧 Poll results email sent!", icon="✅")
-
-        # ── Email 2: leaderboard ──────────────────────────────────────────────
-        send_leaderboard(match, result, tournament_id, t_name)
-        st.toast("📧 Leaderboard email sent!", icon="✅")
-
-    except Exception as e:
-        st.warning(f"Email failed: {e}", icon="⚠️")
-        raise   # re-raise so it appears in Streamlit logs too

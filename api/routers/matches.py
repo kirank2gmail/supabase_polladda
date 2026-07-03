@@ -23,6 +23,7 @@ from data.db import (
     match_id_exists_in_tournament,
 )
 from utils.match_helpers import options_from_title, parse_time, validate_options
+from utils.timezone import is_voting_open
 
 from api.deps import get_current_user, require_admin
 from api.schemas import BulkImportResult, MatchCreateRequest, MatchOut, VoteOut
@@ -34,7 +35,9 @@ REQUIRED_CSV_COLUMNS = ["match_id", "title", "location", "match_date", "start_ti
 
 @router.get("/tournaments/{tournament_id}/matches", response_model=list[MatchOut])
 def list_matches(tournament_id: str, user: dict = Depends(get_current_user)):
-    return get_matches(tournament_id=tournament_id)
+    # is_voting_open is timezone-sensitive (per-match venue timezone) — computed
+    # here rather than duplicating utils/timezone.py's logic in TypeScript.
+    return [{**m, "is_voting_open": is_voting_open(m)} for m in get_matches(tournament_id=tournament_id)]
 
 
 @router.post("/tournaments/{tournament_id}/matches", response_model=MatchOut)
