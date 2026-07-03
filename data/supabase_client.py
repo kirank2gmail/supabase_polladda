@@ -1,13 +1,22 @@
 """
 data/supabase_client.py — Supabase Postgres backend for the live app.
 
+Framework-agnostic: safe to import from Streamlit (app.py, pages/*.py,
+admin/dashboard.py) or from a stateless service like the FastAPI app under
+api/ — nothing here requires a live Streamlit runtime.
+
 Replaces data/gcs.py. data/gcs.py itself is kept, unmodified, purely as the
 source reader for the one-time GCS -> Supabase migration script
 (utils/migrate_to_supabase.py); nothing in the live app imports it.
 
 Same three-tier caching design as the old gcs.py:
-  1. SESSION CACHE (st.session_state) — users, tournaments, matches,
-     registrations, points. Loaded once per session; invalidated on write.
+  1. SESSION CACHE (process-global dict) — users, tournaments, matches,
+     registrations, points. Loaded once per process; invalidated on write.
+     Was st.session_state-scoped (one copy per Streamlit browser tab); now a
+     plain module-level dict (one shared copy per process) — safe because
+     every write path already calls sess_clear(table) right after writing,
+     and this app's scale means a single shared warm cache is strictly
+     better than N per-session copies of the same data.
   2. VOTES — 30s TTL, in-process dict, write-through on this session's own
      write so the user sees their own vote instantly.
   3. SESSIONS — 60s st.cache_data TTL.
@@ -16,16 +25,17 @@ Same three-tier caching design as the old gcs.py:
   caller queries it directly, scoped by tournament_id/match_id, so it is
   always fully fresh (single source of truth for points calculation).
 
-Requires .streamlit/secrets.toml:
-    [supabase]
-    url = "https://xxxxxxxxxxxx.supabase.co"
-    key = "eyJhbGciOi..."   # service_role secret key — never the anon key
+Config: reads [supabase].url/.key from st.secrets when Streamlit is
+available (.streamlit/secrets.toml, unchanged for the Streamlit app), else
+falls back to the SUPABASE_URL/SUPABASE_KEY environment variables (used by
+the FastAPI service, which has no secrets.toml).
 """
 
+import os
 import time as _time
+from functools import lru_cache
 import streamlit as st
 
-SESSION_KEY  = "_sb_cache"
 VOTES_TTL    = 30    # seconds — how stale other users' votes can be
 SESSION_TBLS = {"users", "tournaments", "matches", "registrations", "points"}
 PAGE_SIZE    = 1000  # PostgREST's default max rows per response — anything
@@ -33,13 +43,33 @@ PAGE_SIZE    = 1000  # PostgREST's default max rows per response — anything
                       # select_all(), or results are silently truncated.
 
 
+# ── Config ────────────────────────────────────────────────────────────────────
+
+def _secret(section: str, key: str, env_var: str) -> str:
+    """Try st.secrets first (keeps .streamlit/secrets.toml working unchanged
+    for the Streamlit app); fall back to an env var (for the API process,
+    which has no secrets.toml)."""
+    try:
+        val = st.secrets[section][key]
+        if val:
+            return val
+    except Exception:
+        pass
+    val = os.environ.get(env_var)
+    if not val:
+        raise RuntimeError(
+            f"Missing config: st.secrets['{section}']['{key}'] or ${env_var}"
+        )
+    return val
+
+
 # ── Client ────────────────────────────────────────────────────────────────────
 
-@st.cache_resource
+@lru_cache(maxsize=1)
 def get_client():
     from supabase import create_client
-    url = st.secrets["supabase"]["url"]
-    key = st.secrets["supabase"]["key"]
+    url = _secret("supabase", "url", "SUPABASE_URL")
+    key = _secret("supabase", "key", "SUPABASE_KEY")
     return create_client(url, key)
 
 
@@ -117,10 +147,15 @@ def ttl_sessions_clear():
     _ttl_sessions.clear()
 
 
-# ── Session-scoped full-table cache ──────────────────────────────────────────
+# ── Process-global full-table cache ──────────────────────────────────────────
+# Was st.session_state-scoped (one copy per Streamlit browser tab); now a
+# plain module-level dict — see the module docstring for why this is safe.
+
+_process_cache: dict = {}
+
 
 def _sess() -> dict:
-    return st.session_state.setdefault(SESSION_KEY, {})
+    return _process_cache
 
 
 def _sess_get(table: str) -> list[dict]:

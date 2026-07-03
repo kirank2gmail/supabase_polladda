@@ -2,6 +2,10 @@
 data/activity_log.py
 User activity logging to the Supabase activity_log table.
 
+Framework-agnostic: the batching queue is a plain process-global list, not
+st.session_state, so this works the same whether called from Streamlit or
+from the FastAPI service under api/.
+
 Logged events:
   login         — user signed in
   logout        — user signed out (with session duration)
@@ -13,9 +17,10 @@ Each record:
 """
 
 import uuid
-import streamlit as st
 from datetime import datetime, timezone
 from data.supabase_client import get_client
+
+_activity_queue: list[dict] = []
 
 
 def _now() -> str:
@@ -36,8 +41,8 @@ def _get_name(user_id: str) -> str:
 
 def _log(user_id: str, event: str, details: dict = None):
     """
-    Queue activity record in session state.
-    Writes to Supabase only when queue reaches 5 events or on flush.
+    Queue activity record in a process-global list.
+    Writes to Supabase only when the queue reaches 5 events or on flush.
     This avoids a write on every vote action.
     """
     try:
@@ -49,12 +54,10 @@ def _log(user_id: str, event: str, details: dict = None):
             "timestamp" : _now(),
             "details"   : details or {},
         }
-        queue = st.session_state.get("_activity_queue", [])
-        queue.append(record)
-        st.session_state["_activity_queue"] = queue
+        _activity_queue.append(record)
 
         # Flush to Supabase when queue has 5+ records, or for login events
-        if len(queue) >= 5 or event == "login":
+        if len(_activity_queue) >= 5 or event == "login":
             _flush()
     except Exception:
         pass
@@ -63,11 +66,10 @@ def _log(user_id: str, event: str, details: dict = None):
 def _flush():
     """Write queued activity records to Supabase in one batch insert."""
     try:
-        queue = st.session_state.get("_activity_queue", [])
-        if not queue:
+        if not _activity_queue:
             return
-        get_client().table("activity_log").insert(queue).execute()
-        st.session_state["_activity_queue"] = []
+        get_client().table("activity_log").insert(_activity_queue).execute()
+        _activity_queue.clear()
     except Exception:
         pass
 
