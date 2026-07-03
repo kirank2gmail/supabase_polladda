@@ -34,7 +34,10 @@ router = APIRouter()
 
 @router.post("/tournaments/{tournament_id}/recalculate", response_model=RecalculateResult)
 def recalculate(tournament_id: str, admin: dict = Depends(require_admin)):
-    recalc, abandoned, errors = recalculate_tournament(tournament_id)
+    try:
+        recalc, abandoned, errors = recalculate_tournament(tournament_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return RecalculateResult(recalculated=recalc, abandoned=abandoned, errors=errors)
 
 

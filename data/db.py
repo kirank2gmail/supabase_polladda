@@ -350,8 +350,15 @@ def update_match_result(match_id: str, result: str):
     sess_clear("matches")
 
 def mark_match_abandoned(match_id: str):
-    """No voters — mark as abandoned. No points calculated, misses not counted."""
-    _sb().table("matches").update({"result": "abandoned", "status": "abandoned"}) \
+    """
+    No voters — mark as abandoned. No points calculated, misses not counted.
+
+    Deliberately does NOT overwrite `result` — only `status`. See
+    data/points.py::_mark_abandoned for why: overwriting result destroys the
+    admin's original winning-option entry, making the match permanently
+    unrecalculable even after the underlying data changes.
+    """
+    _sb().table("matches").update({"status": "abandoned"}) \
         .eq("match_id", match_id).execute()
     sess_clear("matches")
     # Clear any previously calculated points for this match

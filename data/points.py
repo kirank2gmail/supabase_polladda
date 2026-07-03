@@ -21,9 +21,24 @@ Exact rules:
     FIXED mode → fixed_odds (flat). Everything else goes to bank.
 """
 
+import threading
+
 from data.supabase_client import read_table, get_client, sess_clear, ttl_votes_clear, select_all
 
 ABANDONED = "abandoned"   # sentinel returned when match has no voters
+
+# Root cause of a real data-corruption incident: recalculate_tournament does
+# a delete-then-rebuild of match_players (via rebuild_for_tournament) before
+# recalculating points. Two overlapping calls for the SAME tournament (e.g.
+# a double-click on "Recalculate Tournament" during the ~15-20s it takes,
+# before the frontend had a loading indicator) can interleave their
+# delete+insert sequences, so the points-calculation loop can transiently
+# observe an empty/partial match_players table and wrongly mark unrelated
+# matches abandoned. This lock serializes recalculate_tournament calls for
+# the same tournament within this process (the app runs single-process/
+# single-worker, so this fully prevents the race).
+_recalc_locks: dict = {}
+_recalc_locks_guard = threading.Lock()
 
 
 def _get_tournament(tid):
@@ -286,10 +301,21 @@ def _deduplicate_votes(match_id: str):
 
 
 def _mark_abandoned(match_id: str):
-    """Delete points and mark match as abandoned."""
+    """
+    Delete points and mark match as abandoned.
+
+    Deliberately does NOT overwrite `result` — only `status`. Overwriting
+    result destroys the admin's original winning-option entry, which makes
+    the match permanently unrecalculable even after the underlying data
+    changes (e.g. a reinstated player restoring a valid contest): with no
+    original result on record, a future recalculation has no winning_option
+    to re-check the abandon condition against. Keeping `result` intact lets
+    recalculate_tournament always re-evaluate fresh instead of treating
+    "abandoned" as a permanent, one-way state.
+    """
     delete_match_points(match_id)
     get_client().table("matches").update({
-        "result": "abandoned", "status": "abandoned",
+        "status": "abandoned",
     }).eq("match_id", match_id).execute()
     sess_clear("matches"); sess_clear("points")
 
@@ -352,45 +378,68 @@ def recalculate_tournament(tournament_id: str) -> tuple[int, int, int]:
     in chronological order. Use after correcting votes or when a new player
     joins mid-tournament.
 
+    Serialized per tournament_id (see _recalc_locks) — raises RuntimeError
+    if a recalculation for this tournament is already in progress, rather
+    than letting two overlapping runs race on the same match_players data.
+
     Returns (recalculated_count, abandoned_count, error_count).
     """
-    from data.match_players import rebuild_for_tournament
-    from data.db import get_matches
+    with _recalc_locks_guard:
+        if _recalc_locks.get(tournament_id):
+            raise RuntimeError(
+                f"A recalculation for {tournament_id} is already in progress — "
+                "please wait for it to finish before trying again."
+            )
+        _recalc_locks[tournament_id] = True
 
-    rebuild_for_tournament(tournament_id)
+    try:
+        from data.match_players import rebuild_for_tournament
+        from data.db import get_matches
 
-    all_ms = get_matches(tournament_id)
-    done = sorted(
-        [m for m in all_ms
-         if m.get("tournament_id") == tournament_id
-         and m["status"] in ("completed", "abandoned")
-         and m.get("result") not in ("", None)],
-        key=lambda m: m["match_date"] + " " + m["start_time"]
-    )
+        rebuild_for_tournament(tournament_id)
 
-    # Fetch match_players ONCE for the whole tournament and reuse it across
-    # every match below — nothing in this loop mutates match_players (only
-    # points/matches tables), so one snapshot stays valid throughout. Avoids
-    # an N+1 fetch that made recalculating a ~90-match tournament take 40+
-    # seconds (one full-tournament match_players fetch per match).
-    all_mp = select_all(lambda: get_client().table("match_players").select("*")
-                         .eq("tournament_id", tournament_id))
+        all_ms = get_matches(tournament_id)
+        done = sorted(
+            [m for m in all_ms
+             if m.get("tournament_id") == tournament_id
+             and m["status"] in ("completed", "abandoned")
+             and m.get("result") not in ("", None)],
+            key=lambda m: m["match_date"] + " " + m["start_time"]
+        )
 
-    recalc = abandoned = errors = 0
-    for m in done:
-        if m.get("status") == "abandoned" and m.get("result") == "abandoned":
-            delete_match_points(m["match_id"])
-            abandoned += 1
-            continue
-        try:
-            result = run_points_calculation(m["match_id"], tournament_id, m.get("result", ""), all_mp=all_mp)
-            if result is ABANDONED:
+        # Fetch match_players ONCE for the whole tournament and reuse it across
+        # every match below — nothing in this loop mutates match_players (only
+        # points/matches tables), so one snapshot stays valid throughout. Avoids
+        # an N+1 fetch that made recalculating a ~90-match tournament take 40+
+        # seconds (one full-tournament match_players fetch per match).
+        all_mp = select_all(lambda: get_client().table("match_players").select("*")
+                             .eq("tournament_id", tournament_id))
+
+        recalc = abandoned = errors = 0
+        for m in done:
+            if m.get("result") == "abandoned":
+                # Legacy-corrupted data from before the result-preservation fix in
+                # _mark_abandoned/mark_match_abandoned — the true winning option
+                # was overwritten and can't be recovered here. Matches with
+                # status="abandoned" but a REAL result (either predating this bug
+                # or manually restored) fall through below and get re-evaluated
+                # fresh every time, so they self-correct if the underlying data
+                # (e.g. a reinstated player) now supports a valid contest again.
+                delete_match_points(m["match_id"])
                 abandoned += 1
-            else:
-                recalc += 1
-        except Exception:
-            errors += 1
-    return recalc, abandoned, errors
+                continue
+            try:
+                result = run_points_calculation(m["match_id"], tournament_id, m.get("result", ""), all_mp=all_mp)
+                if result is ABANDONED:
+                    abandoned += 1
+                else:
+                    recalc += 1
+            except Exception:
+                errors += 1
+        return recalc, abandoned, errors
+    finally:
+        with _recalc_locks_guard:
+            _recalc_locks.pop(tournament_id, None)
 
 
 def apply_match_result(match_id: str, tournament_id: str, winner: str) -> dict:
