@@ -26,6 +26,15 @@ export interface Tournament {
   penalty_points: number;
 }
 
+export interface TournamentCreateRequest {
+  tournament_id: string;
+  name: string;
+  sport: string;
+  start_date: string;
+  allowed_misses: number;
+  penalty_points: number;
+}
+
 export interface HeroStat {
   names: string;
   value: number;
@@ -69,9 +78,13 @@ export interface MatchOut {
   start_time: string;
   timezone: string;
   options: string;
+  scoring_mode: string;
+  fixed_odds: number;
+  poll_mode: string;
   status: string;
   result: string;
-  [key: string]: unknown;
+  created_by: string | null;
+  created_at: string | null;
 }
 
 export interface LeaderboardResponse {
@@ -86,4 +99,39 @@ export interface LeaderboardResponse {
   penalty_total: number;
   penalties: PenaltyOut[];
   heroes: Record<string, HeroStat>;
+}
+
+export interface VoteOut {
+  vote_id: string;
+  user_id: string;
+  match_id: string;
+  tournament_id: string;
+  vote: string;
+  voted_at: string | null;
+  updated_at: string | null;
+  update_count: number;
+  player_name: string;
+}
+
+export interface BulkImportSkip {
+  match_id: string;
+  reason: string;
+}
+
+export interface BulkImportResult {
+  created: number;
+  skipped: BulkImportSkip[];
+}
+
+export interface MatchCreateRequest {
+  match_id: string;
+  title: string;
+  location: string;
+  match_date: string;
+  start_time: string;
+  timezone: string;
+  options?: string;
+  scoring_mode?: string;
+  fixed_odds?: number;
+  poll_mode?: string;
 }

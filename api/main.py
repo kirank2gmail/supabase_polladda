@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
-from api.routers import auth, tournaments
+from api.routers import auth, matches, tournaments, users
 
 app = FastAPI(title="SportsPoll API")
 
@@ -24,6 +24,9 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(tournaments.router, prefix="/tournaments", tags=["tournaments"])
+app.include_router(users.router, prefix="/users", tags=["users"])
+# matches.py defines its own full paths (/tournaments/{id}/matches, /matches/{id}, ...) — no prefix.
+app.include_router(matches.router, tags=["matches"])
 
 
 @app.get("/health")

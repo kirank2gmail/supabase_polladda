@@ -33,7 +33,11 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const token = getToken();
   const headers = new Headers(options.headers);
-  headers.set("Content-Type", "application/json");
+  // Don't force JSON content-type for FormData bodies (file uploads) — the
+  // browser must set its own multipart boundary automatically.
+  if (!(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });

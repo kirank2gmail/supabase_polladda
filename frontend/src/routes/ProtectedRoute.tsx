@@ -1,6 +1,7 @@
 import { Navigate } from "react-router-dom";
 import type { ReactNode } from "react";
 import { useAuth } from "../context/AuthContext";
+import { Navbar } from "../components/Navbar";
 
 export function ProtectedRoute({ children }: { children: ReactNode }) {
   const { user, loading, mustChangePassword } = useAuth();
@@ -14,5 +15,10 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
   if (mustChangePassword) {
     return <Navigate to="/login" replace />;
   }
-  return <>{children}</>;
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <Navbar />
+      {children}
+    </div>
+  );
 }

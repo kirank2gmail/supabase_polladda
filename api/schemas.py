@@ -89,3 +89,89 @@ class LeaderboardResponse(BaseModel):
     penalty_total: float
     penalties: list[PenaltyOut]
     heroes: dict[str, HeroStat]
+
+
+# ── Admin: users ──────────────────────────────────────────────────────────────
+
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+
+
+class RoleUpdateRequest(BaseModel):
+    role: str
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str
+
+
+# ── Admin: tournaments ────────────────────────────────────────────────────────
+
+class TournamentCreateRequest(BaseModel):
+    tournament_id: str
+    name: str
+    sport: str
+    start_date: str
+    allowed_misses: int = 3
+    penalty_points: float = 1.0
+
+
+class TournamentStatusRequest(BaseModel):
+    status: str
+
+
+# ── Admin: matches ────────────────────────────────────────────────────────────
+
+class MatchCreateRequest(BaseModel):
+    match_id: str
+    title: str
+    location: str
+    match_date: str
+    start_time: str
+    timezone: str
+    options: str = ""
+    scoring_mode: str = "ratio"
+    fixed_odds: float = 1.0
+    poll_mode: str = "closed"
+
+
+class MatchOut(BaseModel):
+    match_id: str
+    tournament_id: str
+    title: str
+    location: str
+    match_date: str
+    start_time: str
+    timezone: str
+    options: str
+    scoring_mode: str
+    fixed_odds: float
+    poll_mode: str
+    status: str
+    result: str
+    created_by: str | None = None
+    created_at: str | None = None
+
+
+class VoteOut(BaseModel):
+    vote_id: str
+    user_id: str
+    match_id: str
+    tournament_id: str
+    vote: str
+    voted_at: str | None = None
+    updated_at: str | None = None
+    update_count: int
+    player_name: str
+
+
+class BulkImportSkip(BaseModel):
+    match_id: str
+    reason: str
+
+
+class BulkImportResult(BaseModel):
+    created: int
+    skipped: list[BulkImportSkip]

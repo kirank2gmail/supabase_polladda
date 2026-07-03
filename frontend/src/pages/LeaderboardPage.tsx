@@ -4,10 +4,8 @@ import type { LeaderboardResponse, Tournament } from "../api/types";
 import { LeaderboardTable } from "../components/LeaderboardTable";
 import { HeroCards } from "../components/HeroCards";
 import { PenaltiesTable } from "../components/PenaltiesTable";
-import { useAuth } from "../context/AuthContext";
 
 export function LeaderboardPage() {
-  const { user, logout } = useAuth();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [data, setData] = useState<LeaderboardResponse | null>(null);
@@ -39,18 +37,7 @@ export function LeaderboardPage() {
 
   return (
     <div className="mx-auto max-w-5xl p-4">
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-bold">🏆 SportsPoll</h1>
-        <div className="flex items-center gap-3 text-sm text-gray-500">
-          <span>👤 {user?.nickname}</span>
-          <button
-            onClick={logout}
-            className="rounded border border-gray-300 px-3 py-1 hover:bg-gray-100"
-          >
-            Sign Out
-          </button>
-        </div>
-      </div>
+      <h1 className="mb-4 text-xl font-bold">🏅 Leaderboard</h1>
 
       {tournaments.length > 0 && (
         <select

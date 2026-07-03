@@ -3,7 +3,6 @@ admin/dashboard.py — Admin panel.
 Changes: delete_tournament option added to tournaments tab.
 """
 
-import re
 import streamlit as st
 import pandas as pd
 from datetime import date, time
@@ -29,51 +28,11 @@ from utils.email_sender import (
     send_poll_results, send_leaderboard, email_configured
 )
 from utils.timezone import COMMON_TIMEZONES, get_match_cutoff_utc, is_voting_open, format_ts
-
-
-def _parse_time(raw: str) -> str:
-    """
-    Parse time string flexibly, defaulting missing mm/ss to 00.
-    Accepts: "19", "19:30", "19:30:00", "7pm", "7:30pm"
-    Returns: "HH:MM" always.
-    """
-    import re
-    raw = str(raw).strip()
-    if not raw: return "00:00"
-
-    # Handle am/pm
-    pm = raw.lower().endswith("pm")
-    am = raw.lower().endswith("am")
-    raw_clean = re.sub(r'[aApP][mM]$', '', raw).strip()
-
-    parts = re.split(r'[:.]', raw_clean)
-    try:
-        hh = int(parts[0]) if parts else 0
-        mm = int(parts[1]) if len(parts) > 1 else 0
-        # ss ignored — we only need HH:MM
-    except ValueError:
-        return "00:00"
-
-    if pm and hh != 12: hh += 12
-    if am and hh == 12: hh  = 0
-    hh = min(hh, 23)
-    mm = min(mm, 59)
-    return f"{hh:02d}:{mm:02d}"
-
-
-def _options_from_title(title: str) -> str:
-    if not title.strip(): return ""
-    parts = re.split(r'\s+(?:vs\.?|v\.?)\s+|\s*/\s*|\s+-\s+',
-                     title.strip(), flags=re.IGNORECASE)
-    parts = [p.strip() for p in parts if p.strip()]
-    return "|".join(parts) if len(parts) >= 2 else ""
-
-
-def _validate_options(s: str) -> tuple[bool, str]:
-    parts = [o.strip() for o in s.split("|") if o.strip()]
-    if len(parts) < 2:
-        return False, "At least 2 options required, pipe-separated e.g. `SRH|RCB`"
-    return True, ""
+from utils.match_helpers import (
+    parse_time as _parse_time,
+    options_from_title as _options_from_title,
+    validate_options as _validate_options,
+)
 
 
 def show_admin(user: dict):
