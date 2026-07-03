@@ -8,7 +8,7 @@ export function AdminRoute({ children }: { children: ReactNode }) {
 
   return (
     <ProtectedRoute>
-      {user?.role === "admin" ? children : <Navigate to="/leaderboard" replace />}
+      {user?.role === "admin" ? children : <Navigate to="/" replace />}
     </ProtectedRoute>
   );
 }

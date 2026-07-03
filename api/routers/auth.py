@@ -7,6 +7,7 @@ valid on the Streamlit side too, and vice versa, since both read/write the
 same Supabase "sessions" table.
 """
 
+import pytz
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from data.activity_log import log_login
@@ -16,9 +17,12 @@ from data.db import (
     create_user,
     get_user_by_name,
     is_legacy_password,
+    update_nickname,
+    update_user_timezone,
     verify_password,
 )
 from utils.session_manager import create_session, delete_session
+from utils.timezone import COMMON_TIMEZONES
 
 from api.deps import get_current_user
 from api.schemas import (
@@ -26,6 +30,9 @@ from api.schemas import (
     ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
+    NicknameUpdateRequest,
+    TimezoneListResponse,
+    TimezoneUpdateRequest,
     UserOut,
 )
 
@@ -99,3 +106,27 @@ def logout(authorization: str = Header(default="")):
 @router.get("/me", response_model=UserOut)
 def me(user: dict = Depends(get_current_user)):
     return UserOut(**user)
+
+
+@router.patch("/me/nickname")
+def update_nickname_endpoint(
+    body: NicknameUpdateRequest, user: dict = Depends(get_current_user)
+):
+    if not body.nickname.strip():
+        raise HTTPException(status_code=400, detail="Nickname cannot be empty.")
+    update_nickname(user["user_id"], body.nickname.strip())
+    return {"ok": True}
+
+
+@router.patch("/me/timezone")
+def update_timezone_endpoint(
+    body: TimezoneUpdateRequest, user: dict = Depends(get_current_user)
+):
+    update_user_timezone(user["user_id"], body.timezone)
+    return {"ok": True}
+
+
+@router.get("/timezones", response_model=TimezoneListResponse)
+def list_timezones(user: dict = Depends(get_current_user)):
+    all_tz = COMMON_TIMEZONES + [t for t in pytz.all_timezones if t not in COMMON_TIMEZONES]
+    return TimezoneListResponse(common=COMMON_TIMEZONES, all=all_tz)

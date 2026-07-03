@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.config import settings
-from api.routers import auth, matches, quit, results, tournaments, users
+from api.routers import auth, home, matches, quit, results, tournaments, users, votes
 
 app = FastAPI(title="SportsPoll API")
 
@@ -30,6 +30,8 @@ app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(matches.router, tags=["matches"])
 app.include_router(results.router, tags=["results"])
 app.include_router(quit.router, tags=["quit"])
+app.include_router(home.router, tags=["home"])
+app.include_router(votes.router, tags=["votes"])
 
 
 @app.get("/health")

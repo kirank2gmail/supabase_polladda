@@ -3,7 +3,10 @@ import { AuthProvider } from "./context/AuthContext";
 import { ProtectedRoute } from "./routes/ProtectedRoute";
 import { AdminRoute } from "./routes/AdminRoute";
 import { LoginPage } from "./pages/LoginPage";
+import { HomePage } from "./pages/HomePage";
+import { MatchPage } from "./pages/MatchPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
+import { ProfilePage } from "./pages/ProfilePage";
 import AdminPage from "./AdminPage";
 
 export default function App() {
@@ -13,10 +16,34 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <HomePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/match/:matchId"
+            element={
+              <ProtectedRoute>
+                <MatchPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/leaderboard"
             element={
               <ProtectedRoute>
                 <LeaderboardPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
               </ProtectedRoute>
             }
           />
@@ -28,8 +55,7 @@ export default function App() {
               </AdminRoute>
             }
           />
-          <Route path="/" element={<Navigate to="/leaderboard" replace />} />
-          <Route path="*" element={<Navigate to="/leaderboard" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

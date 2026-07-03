@@ -184,3 +184,102 @@ export interface MissFloorStatus {
   record_count: number;
   label: string;
 }
+
+// ── Profile ───────────────────────────────────────────────────────────────────
+
+export interface TimezoneListResponse {
+  common: string[];
+  all: string[];
+}
+
+// ── Home page ─────────────────────────────────────────────────────────────────
+
+export interface MatchTimesOut {
+  local: string;
+  utc: string;
+  user: string | null;
+  tz: string;
+}
+
+export interface CountdownOut {
+  message: string;
+  severity: "success" | "warning" | "error";
+}
+
+export interface HomeMatchOut {
+  match: MatchOut;
+  times: MatchTimesOut;
+  countdown: CountdownOut | null;
+  my_vote: string | null;
+  my_points: number | null;
+  correct: boolean | null;
+}
+
+export interface HomeResponse {
+  upcoming: HomeMatchOut[];
+  in_progress: HomeMatchOut[];
+  completed: HomeMatchOut[];
+}
+
+// ── Match detail / voting / poll / result ────────────────────────────────────
+
+export interface VoteSelfOut {
+  vote: string;
+  voted_at: string | null;
+  updated_at: string | null;
+  update_count: number;
+}
+
+export interface MatchDetailResponse {
+  match: MatchOut;
+  times: MatchTimesOut;
+  countdown: CountdownOut;
+  my_vote: VoteSelfOut | null;
+}
+
+export interface PollVoterOut {
+  user_id: string;
+  name: string;
+  voted_at: string | null;
+}
+
+export interface PollOptionOut {
+  option: string;
+  count: number;
+  pct: number;
+  voters: PollVoterOut[] | null;
+}
+
+export interface PollSummaryResponse {
+  total: number;
+  hidden: boolean;
+  options: PollOptionOut[];
+}
+
+export interface ResultVoterOut {
+  user_id: string;
+  name: string;
+  voted_at: string | null;
+  points: number;
+}
+
+export interface ResultOptionOut {
+  option: string;
+  is_win: boolean;
+  pts_label: string;
+  voters: ResultVoterOut[];
+}
+
+export interface MissedPenalizedOut {
+  user_id: string;
+  name: string;
+  note: string;
+  points: number;
+}
+
+export interface ResultBreakdownResponse {
+  result: string;
+  winner_points: number;
+  options: ResultOptionOut[];
+  missed: MissedPenalizedOut[];
+}

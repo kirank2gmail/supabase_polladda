@@ -17,6 +17,7 @@ interface AuthState {
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
   completePasswordChange: () => void;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | undefined>(undefined);
@@ -66,9 +67,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser((u) => (u ? { ...u, must_change_password: false } : u));
   };
 
+  const refreshUser = async () => {
+    const u = await authApi.me();
+    setUser(u);
+  };
+
   return (
     <AuthContext.Provider
-      value={{ user, loading, mustChangePassword, login, logout, completePasswordChange }}
+      value={{
+        user,
+        loading,
+        mustChangePassword,
+        login,
+        logout,
+        completePasswordChange,
+        refreshUser,
+      }}
     >
       {children}
     </AuthContext.Provider>

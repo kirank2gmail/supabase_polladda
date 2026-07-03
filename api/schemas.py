@@ -244,3 +244,114 @@ class MissFloorStatus(BaseModel):
 
 class MissFloorApplyRequest(BaseModel):
     from_match_id: str
+
+
+# ── Profile ───────────────────────────────────────────────────────────────────
+
+class NicknameUpdateRequest(BaseModel):
+    nickname: str
+
+
+class TimezoneUpdateRequest(BaseModel):
+    timezone: str
+
+
+class TimezoneListResponse(BaseModel):
+    common: list[str]
+    all: list[str]
+
+
+# ── Home page ─────────────────────────────────────────────────────────────────
+
+class MatchTimesOut(BaseModel):
+    local: str
+    utc: str
+    user: str | None = None
+    tz: str
+
+
+class CountdownOut(BaseModel):
+    message: str
+    severity: str  # "success" | "warning" | "error"
+
+
+class HomeMatchOut(BaseModel):
+    match: MatchOut
+    times: MatchTimesOut
+    countdown: CountdownOut | None = None   # upcoming matches only
+    my_vote: str | None = None
+    my_points: float | None = None          # completed matches only
+    correct: bool | None = None             # completed matches only
+
+
+class HomeResponse(BaseModel):
+    upcoming: list[HomeMatchOut]
+    in_progress: list[HomeMatchOut]
+    completed: list[HomeMatchOut]
+
+
+# ── Match detail / voting / poll / result ────────────────────────────────────
+
+class VoteSelfOut(BaseModel):
+    vote: str
+    voted_at: str | None = None
+    updated_at: str | None = None
+    update_count: int
+
+
+class MatchDetailResponse(BaseModel):
+    match: MatchOut
+    times: MatchTimesOut
+    countdown: CountdownOut
+    my_vote: VoteSelfOut | None = None
+
+
+class VoteCastRequest(BaseModel):
+    vote: str
+
+
+class PollVoterOut(BaseModel):
+    user_id: str
+    name: str
+    voted_at: str | None = None
+
+
+class PollOptionOut(BaseModel):
+    option: str
+    count: int
+    pct: int
+    voters: list[PollVoterOut] | None = None   # None unless voters are visible
+
+
+class PollSummaryResponse(BaseModel):
+    total: int
+    hidden: bool   # True => poll_mode="closed" + voting still open + not admin
+    options: list[PollOptionOut]
+
+
+class ResultVoterOut(BaseModel):
+    user_id: str
+    name: str
+    voted_at: str | None = None
+    points: float
+
+
+class ResultOptionOut(BaseModel):
+    option: str
+    is_win: bool
+    pts_label: str
+    voters: list[ResultVoterOut]
+
+
+class MissedPenalizedOut(BaseModel):
+    user_id: str
+    name: str
+    note: str
+    points: float
+
+
+class ResultBreakdownResponse(BaseModel):
+    result: str
+    winner_points: float
+    options: list[ResultOptionOut]
+    missed: list[MissedPenalizedOut]

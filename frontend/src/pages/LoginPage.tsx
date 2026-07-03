@@ -17,7 +17,7 @@ export function LoginPage() {
   const [pwError, setPwError] = useState<string | null>(null);
 
   if (user && !mustChangePassword) {
-    return <Navigate to="/leaderboard" replace />;
+    return <Navigate to="/" replace />;
   }
 
   const handleLogin = async (e: FormEvent) => {

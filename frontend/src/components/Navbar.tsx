@@ -15,8 +15,14 @@ export function Navbar() {
         <div className="flex items-center gap-4">
           <span className="text-lg font-extrabold">🏆</span>
           <nav className="flex gap-1">
+            <NavLink to="/" end className={linkClass}>
+              🏠 Home
+            </NavLink>
             <NavLink to="/leaderboard" className={linkClass}>
               🏅 Leaderboard
+            </NavLink>
+            <NavLink to="/profile" className={linkClass}>
+              👤 Profile
             </NavLink>
             {user?.role === "admin" && (
               <NavLink to="/admin" className={linkClass}>
