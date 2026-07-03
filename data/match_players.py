@@ -84,6 +84,26 @@ def _is_abandoned(m: dict) -> bool:
             or m.get("result") == "abandoned")
 
 
+def _is_unrecoverable(m: dict) -> bool:
+    """
+    True only for legacy-corrupted matches where the true winning option was
+    overwritten to the literal string "abandoned" (see data/points.py's old
+    _mark_abandoned, fixed to stop doing this) — there is no result left to
+    recalculate against, so match_players rows can never be rebuilt for these.
+
+    Deliberately narrower than _is_abandoned (which also matches
+    status == "abandoned"): status is re-derived fresh every time
+    recalculate_tournament runs and can flip back to "completed" once
+    whatever caused it (e.g. all active winning voters quitting) no longer
+    holds (e.g. after reinstate). Using _is_abandoned here instead would make
+    status == "abandoned" a one-way door — _build_records_for_match would
+    keep producing zero rows for the match, run_points_calculation would
+    keep seeing zero active voters, and it would re-abandon itself forever
+    even after the underlying contest becomes valid again.
+    """
+    return m.get("result") == "abandoned"
+
+
 # ── per-match record builder (shared by both single-match and full rebuild) ───
 
 def _build_records_for_match(
@@ -105,10 +125,13 @@ def _build_records_for_match(
         the same from_match_id so boundary-building on future reads is
         consistent and unambiguous.
 
-    Returns [] for abandoned matches.
+    Returns [] for unrecoverable (legacy-corrupted) matches only — see
+    _is_unrecoverable. A match currently flagged status="abandoned" but
+    with a real result still gets rebuilt normally, so it can self-correct
+    once its underlying contest becomes valid again.
     not_started players produce no record.
     """
-    if _is_abandoned(this_match):
+    if _is_unrecoverable(this_match):
         return []
 
     this_dt = _match_dt(this_match)

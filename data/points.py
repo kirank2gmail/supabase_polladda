@@ -306,6 +306,26 @@ def _mark_abandoned(match_id: str):
     sess_clear("matches"); sess_clear("points")
 
 
+def _mark_completed(match_id: str):
+    """
+    Restore status to "completed" after a successful (non-abandoned) points
+    calculation. Symmetric counterpart to _mark_abandoned.
+
+    Nothing else undoes an abandoned status: a match that went abandoned
+    because all active voters for the winning option had quit, and later
+    regains a valid contest (those voters get reinstated), would otherwise
+    stay permanently mislabeled "abandoned" even after points are correctly
+    recalculated — apply_match_result already self-heals this via
+    update_match_result on its own success path, but recalculate_tournament
+    calls run_points_calculation directly and never touched matches.status
+    on success, so the fix belongs here.
+    """
+    get_client().table("matches").update({
+        "status": "completed",
+    }).eq("match_id", match_id).execute()
+    sess_clear("matches")
+
+
 def run_points_calculation(match_id: str, tournament_id: str,
                             winning_option: str, all_mp: list = None):
     """
@@ -355,6 +375,9 @@ def run_points_calculation(match_id: str, tournament_id: str,
     records = calculate_match_points(match_id, tournament_id, winning_option, all_mp=all_mp)
     if records:
         save_points_batch(records)
+    match = _get_match(match_id)
+    if match and match.get("status") == "abandoned":
+        _mark_completed(match_id)
     return records
 
 
