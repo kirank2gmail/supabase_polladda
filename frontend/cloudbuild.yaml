@@ -1,0 +1,23 @@
+# Builds the frontend image with VITE_API_BASE_URL baked in as a Docker
+# build-arg (Vite env vars are compile-time, so this can't be a Cloud Run
+# runtime env var like the API's config — it has to be set at image-build
+# time, pointing at the already-deployed API service's URL).
+#
+# Usage (from repo root):
+#   gcloud builds submit frontend --config frontend/cloudbuild.yaml \
+#     --substitutions=_VITE_API_BASE_URL=https://<api-service-url>,_IMAGE=<image-ref>
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "--build-arg"
+      - "VITE_API_BASE_URL=${_VITE_API_BASE_URL}"
+      - "-t"
+      - "${_IMAGE}"
+      - "."
+images:
+  - "${_IMAGE}"
+substitutions:
+  _VITE_API_BASE_URL: "http://localhost:8000"
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,20 @@
+# Cloud Build context for the API image (see Dockerfile) — keep this
+# minimal and, critically, never let real secrets into the build context.
+.streamlit/
+.env
+.env.*
+.git/
+__pycache__/
+**/__pycache__/
+*.pyc
+frontend/
+node_modules/
+admin/
+pages/
+auth/
+app.py
+sql/
+*.md
+{auth,pages,admin,data,utils,.streamlit}/
+{pages,admin,data,utils}/
+{pages,utils,components}/

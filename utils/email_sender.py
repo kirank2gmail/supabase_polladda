@@ -8,6 +8,7 @@ PNG attachment matches the HTML body style:
   - Colour-coded cells: green=win, red=loss, amber=miss, grey=abandoned
 """
 
+import os
 import smtplib
 import io
 from email.mime.multipart import MIMEMultipart
@@ -22,8 +23,23 @@ import streamlit as st
 # ── Config ────────────────────────────────────────────────────────────────────
 
 def _cfg():
-    cfg = st.secrets.get("email", {})
-    return cfg.get("sender",""), cfg.get("app_password",""), cfg.get("recipient","")
+    """
+    Reads st.secrets["email"] when a secrets.toml is present (Streamlit),
+    falling back to EMAIL_SENDER/EMAIL_APP_PASSWORD/EMAIL_RECIPIENT env vars
+    (the API process, which ships no secrets.toml) — same pattern as
+    data/supabase_client.py's _secret(). st.secrets raises when no
+    secrets.toml exists at all, so that access is guarded here (unlike
+    _secret(), email is optional config: missing values should make
+    email_configured() return False, not raise).
+    """
+    try:
+        cfg = st.secrets.get("email", {})
+    except Exception:
+        cfg = {}
+    sender    = cfg.get("sender", "")       or os.environ.get("EMAIL_SENDER", "")
+    password  = cfg.get("app_password", "") or os.environ.get("EMAIL_APP_PASSWORD", "")
+    recipient = cfg.get("recipient", "")    or os.environ.get("EMAIL_RECIPIENT", "")
+    return sender, password, recipient
 
 def email_configured() -> bool:
     s, p, r = _cfg()
