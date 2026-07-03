@@ -4,3 +4,16 @@ body {
   margin: 0;
   font-family: system-ui, "Segoe UI", Roboto, sans-serif;
 }
+
+/* Used by LeaderboardTable's split fixed/scrolling tables: hides the
+   scrolling table's native horizontal scrollbar so it doesn't reserve
+   extra height that the fixed (non-scrolling) table lacks, misaligning
+   the two tables' bottoms. A separate, visible custom scrollbar row
+   below both tables drives the actual scroll position instead. */
+.scrollbar-hide {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge/IE */
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/newer Edge */
+}
