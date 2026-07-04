@@ -40,6 +40,13 @@ Design notes
 • quit records are always preserved; they are managed separately by admin.
 • not_started players (first vote is after this match) produce no row.
 • abandoned matches produce no rows.
+• quit BOUNDARIES (who's quit, from which match) are NOT derived from
+  match_players itself — that used to be the case (scanning existing rows
+  for status=="quit") and it made match_players unsafe to ever truncate,
+  since nothing else remembered quit history. The durable source of truth
+  is now data/quit_events.py's append-only event log; match_players' own
+  quit rows are just a regenerated projection of it, like voted/missed
+  rows are a projection of votes.
 """
 
 from __future__ import annotations
@@ -49,6 +56,7 @@ from datetime import datetime, timezone
 
 from data.supabase_client import read_table, get_client, sess_clear, select_all
 from data.tournament_lock import tournament_lock
+from data.quit_events import record_quit_event, get_current_quit_boundaries, get_quit_status_map
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -113,17 +121,19 @@ def _build_records_for_match(
     all_matches: list[dict],
     all_votes: list[dict],
     registrations: list[dict],
-    quit_boundaries: dict[str, str],
+    quit_status_map: dict[tuple[str, str], str],
     existing_mp: list[dict] | None = None,
 ) -> list[dict]:
     """
     Build voted / missed / quit records for a single match.
 
-    quit_boundaries: {user_id: from_match_id} — the match_id from which the
-        player quit.  Any match whose _match_dt() is >= that boundary's
-        _match_dt() gets status="quit".  quit_at on written records stores
-        the same from_match_id so boundary-building on future reads is
-        consistent and unambiguous.
+    quit_status_map: {(user_id, match_id): from_match_id} — precomputed by
+        data.quit_events.get_quit_status_map, which already resolves
+        multi-cycle quit/reinstate history correctly (a past quit window
+        that a later reinstate closed stays closed even after a further
+        quit-again with a different boundary). quit_at on written records
+        stores the from_match_id so it's still visible on the row for
+        display/debugging, but is no longer read back to reconstruct status.
 
     Returns [] for unrecoverable (legacy-corrupted) matches only — see
     _is_unrecoverable. A match currently flagged status="abandoned" but
@@ -183,24 +193,21 @@ def _build_records_for_match(
         if (uid, match_id) in floor_keys:
             continue  # miss_floor record already exists — leave it untouched
 
-        # Check quit boundary — applies to ALL matches on/after the boundary,
-        # including new matches that have no existing quit record yet.
-        # quit_boundaries stores from_match_id; convert to _match_dt for comparison.
-        from_mid = quit_boundaries.get(uid)
+        # quit_status_map already resolves multi-cycle quit/reinstate history
+        # per (user, match) — no date comparison needed here anymore.
+        from_mid = quit_status_map.get((uid, match_id))
         if from_mid:
-            from_dt = match_dt_map.get(from_mid)
-            if from_dt and this_dt >= from_dt:
-                records.append({
-                    "mp_id"        : _uid(),
-                    "match_id"     : match_id,
-                    "tournament_id": tournament_id,
-                    "user_id"      : uid,
-                    "status"       : "quit",
-                    "vote"         : "",
-                    "quit_at"      : from_mid,   # always store match_id, never datetime
-                    "created_at"   : _now(),
-                })
-                continue
+            records.append({
+                "mp_id"        : _uid(),
+                "match_id"     : match_id,
+                "tournament_id": tournament_id,
+                "user_id"      : uid,
+                "status"       : "quit",
+                "vote"         : "",
+                "quit_at"      : from_mid,   # always store match_id, never datetime
+                "created_at"   : _now(),
+            })
+            continue
 
         voted = uid in vote_map
         fvdt  = first_vote_dt.get(uid)
@@ -228,31 +235,6 @@ def _build_records_for_match(
     return records
 
 
-def _build_quit_boundaries(tid: str, t_match_map: dict, existing_mp: list[dict]) -> dict[str, str]:
-    """
-    Build {user_id: earliest quit boundary match_id} for one tournament from
-    existing quit records. quit_at holds the from_match_id passed to
-    quit_player().
-    """
-    quit_boundaries: dict[str, str] = {}
-    for r in existing_mp:
-        if r.get("tournament_id") != tid:
-            continue
-        if r.get("status") != "quit":
-            continue
-        uid          = r["user_id"]
-        boundary_mid = r.get("quit_at") or r["match_id"]
-        bm = t_match_map.get(boundary_mid)
-        if not bm:
-            # Fall back to the record's own match_id as the boundary
-            boundary_mid = r["match_id"]
-            bm = t_match_map.get(boundary_mid)
-        if not bm:
-            continue
-        boundary_dt = _match_dt(bm)
-        if uid not in quit_boundaries or boundary_dt < _match_dt(t_match_map[quit_boundaries[uid]]):
-            quit_boundaries[uid] = boundary_mid
-    return quit_boundaries
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -299,9 +281,7 @@ def migrate_from_votes(
         other_mp = [r for r in existing_mp if r.get("tournament_id") not in tids]
         new_mp: list[dict] = []
         for tid in tids:
-            t_match_map = {m["match_id"]: m for m in all_matches
-                           if m.get("tournament_id") == tid}
-            quit_boundaries = _build_quit_boundaries(tid, t_match_map, existing_mp)
+            quit_status_map = get_quit_status_map(tid, all_matches)
             t_matches = sorted(
                 [m for m in all_matches
                  if m.get("tournament_id") == tid
@@ -312,7 +292,7 @@ def migrate_from_votes(
             for m in t_matches:
                 new_mp.extend(_build_records_for_match(
                     m["match_id"], tid, m, all_matches, all_votes,
-                    registrations, quit_boundaries, existing_mp,
+                    registrations, quit_status_map, existing_mp,
                 ))
 
         if gcs_push_fn:
@@ -334,9 +314,7 @@ def migrate_from_votes(
 
     new_mp: list[dict] = []
     for tid in tids:
-        t_match_map = {m["match_id"]: m for m in all_matches
-                       if m.get("tournament_id") == tid}
-        quit_boundaries = _build_quit_boundaries(tid, t_match_map, existing_mp)
+        quit_status_map = get_quit_status_map(tid, all_matches)
         t_matches = sorted(
             [m for m in all_matches
              if m.get("tournament_id") == tid
@@ -347,7 +325,7 @@ def migrate_from_votes(
         for m in t_matches:
             new_mp.extend(_build_records_for_match(
                 m["match_id"], tid, m, all_matches, all_votes,
-                registrations, quit_boundaries, existing_mp,
+                registrations, quit_status_map, existing_mp,
             ))
 
     sb.table("match_players").delete().in_("tournament_id", tids).execute()
@@ -394,16 +372,14 @@ def rebuild_for_match(match_id: str, tournament_id: str) -> int:
     if not this_match:
         return 0
 
-    t_match_map = {m["match_id"]: m for m in all_matches
-                   if m.get("tournament_id") == tournament_id}
-    quit_boundaries = _build_quit_boundaries(tournament_id, t_match_map, existing_mp)
+    quit_status_map = get_quit_status_map(tournament_id, all_matches)
 
     all_votes = select_all(lambda: sb.table("votes").select("*")
                             .eq("match_id", match_id).eq("tournament_id", tournament_id))
 
     new_records = _build_records_for_match(
         match_id, tournament_id,
-        this_match, all_matches, all_votes, registrations, quit_boundaries,
+        this_match, all_matches, all_votes, registrations, quit_status_map,
         existing_mp,
     )
 
@@ -460,6 +436,13 @@ def quit_player(user_id: str, tournament_id: str, from_match_id: str) -> int:
         from_idx       = match_ids.index(from_match_id)
         quit_match_ids = match_ids[from_idx:]
 
+        # Durable event first — if this raises, the quit never happened as
+        # far as anything that matters is concerned, and match_players is
+        # never touched. Writing match_players first (event second) would
+        # reproduce the original bug's failure mode: the UI looks quit, but
+        # the one durable record of it is silently missing.
+        record_quit_event(user_id, tournament_id, from_match_id, "quit")
+
         resp = get_client().table("match_players").update({
             "status": "quit", "quit_at": from_match_id,
         }).eq("user_id", user_id).eq("tournament_id", tournament_id) \
@@ -501,6 +484,9 @@ def reinstate_player(user_id: str, tournament_id: str, from_match_id: str) -> in
         from_idx            = match_ids.index(from_match_id)
         reinstate_match_ids = match_ids[from_idx:]
 
+        # Durable event first — see quit_player's comment for why.
+        record_quit_event(user_id, tournament_id, from_match_id, "reinstate")
+
         resp = get_client().table("match_players").delete() \
             .eq("user_id", user_id).eq("tournament_id", tournament_id) \
             .eq("status", "quit").in_("match_id", reinstate_match_ids).execute()
@@ -518,56 +504,50 @@ def get_player_quit_status(tournament_id: str) -> dict[str, dict]:
     Returns dict keyed by user_id:
       {
         "has_quit_records"  : bool,
-        "quit_from_match_id": match_id stored in quit_at of the earliest
-                              quit record (str | None),
+        "quit_from_match_id": current quit boundary match_id (str | None),
         "quit_since_label"  : IST label string for that match (str | None),
         "active_matches"    : count of voted/missed records,
         "quit_matches"      : count of quit records,
       }
 
-    quit_at on each record holds the from_match_id passed to quit_player,
-    so finding the earliest quit boundary is a simple string comparison
-    using the match_id-order sort key (_match_dt).
+    "has_quit_records"/"quit_from_match_id"/"quit_since_label" come from
+    data/quit_events.py's durable event log (the current, latest-event
+    boundary) rather than scanning match_players' own rows — that scan is
+    what silently lost quit history when match_players got truncated during
+    a rebuild. "active_matches"/"quit_matches" are just row counts of the
+    (regenerated, self-healing) match_players table and are fine to derive
+    from it as before.
     """
     t_mp = select_all(lambda: get_client().table("match_players").select("*")
                        .eq("tournament_id", tournament_id))
     all_matches = read_table("matches")
 
-    # match_id → match dict (for label generation and sort key)
+    # match_id → match dict (for label generation)
     match_map = {
         m["match_id"]: m
         for m in all_matches
         if m.get("tournament_id") == tournament_id
     }
 
-    # Match-id-order sort key per match_id (reuses existing _match_dt helper)
-    def _sort_key(mid: str) -> str:
-        m = match_map.get(mid)
-        return _match_dt(m) if m else ""
+    quit_boundaries = get_current_quit_boundaries(tournament_id)
 
     status: dict[str, dict] = {}
     for r in t_mp:
         uid = r["user_id"]
         if uid not in status:
+            boundary_mid = quit_boundaries.get(uid)
+            m = match_map.get(boundary_mid) if boundary_mid else None
             status[uid] = {
-                "has_quit_records"  : False,
-                "quit_from_match_id": None,
-                "quit_since_label"  : None,
+                "has_quit_records"  : uid in quit_boundaries,
+                "quit_from_match_id": boundary_mid,
+                "quit_since_label"  : (_match_ist_label(m) if m
+                                       else boundary_mid),
                 "active_matches"    : 0,
                 "quit_matches"      : 0,
             }
         s = status[uid]
         if r.get("status") == "quit":
-            s["has_quit_records"] = True
-            s["quit_matches"]    += 1
-            # quit_at holds the from_match_id used when quitting
-            boundary_mid = r.get("quit_at") or r["match_id"]
-            cur_boundary = s["quit_from_match_id"]
-            if (cur_boundary is None
-                    or _sort_key(boundary_mid) < _sort_key(cur_boundary)):
-                s["quit_from_match_id"] = boundary_mid
-                m = match_map.get(boundary_mid)
-                s["quit_since_label"] = _match_ist_label(m) if m else boundary_mid
+            s["quit_matches"] += 1
         else:
             s["active_matches"] += 1
 
