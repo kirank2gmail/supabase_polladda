@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2 } from "lucide-react";
 import * as tournamentsApi from "../../api/tournaments";
 import * as matchesApi from "../../api/matches";
 import { ApiError } from "../../api/client";
@@ -132,10 +133,10 @@ export function AdminTournamentsTab() {
         <p className="col-span-2 text-sm text-gray-500">
           Users get {allowedMisses} free misses. Each extra miss costs {penaltyPoints} pts.
         </p>
-        {createError && <p className="col-span-2 text-sm text-red-600">{createError}</p>}
+        {createError && <p className="col-span-2 text-sm text-rose-600">{createError}</p>}
         <button
           onClick={handleCreate}
-          className="col-span-2 rounded bg-[#28324f] py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
+          className="btn-raised col-span-2 rounded bg-[#28324f] py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Create Tournament
         </button>
@@ -164,10 +165,10 @@ export function AdminTournamentsTab() {
                 onClick={() =>
                   setDeleteTarget(deleteTarget === t.tournament_id ? null : t.tournament_id)
                 }
-                className="text-red-500 hover:text-red-700"
+                className="text-rose-500 hover:text-rose-700"
                 title="Delete tournament and all data"
               >
-                🗑️
+                <Trash2 size={16} />
               </button>
             </div>
             <div className="flex items-center gap-3">
@@ -188,21 +189,21 @@ export function AdminTournamentsTab() {
             </div>
 
             {deleteTarget === t.tournament_id && (
-              <div className="mt-3 rounded border border-red-300 bg-red-50 p-3">
-                <p className="mb-2 text-sm text-red-800">
+              <div className="mt-3 rounded border border-rose-300 bg-rose-50 p-3">
+                <p className="mb-2 text-sm text-rose-800">
                   Delete {t.name}? This will permanently delete all matches, votes, points and
                   registrations for this tournament.
                 </p>
                 <div className="flex gap-2">
                   <button
                     onClick={() => handleDelete(t.tournament_id)}
-                    className="rounded bg-red-600 px-3 py-1 text-sm text-white"
+                    className="btn-raised rounded bg-rose-600 px-3 py-1 text-sm text-white"
                   >
                     Yes, delete everything
                   </button>
                   <button
                     onClick={() => setDeleteTarget(null)}
-                    className="rounded border border-gray-300 px-3 py-1 text-sm"
+                    className="btn-raised rounded border border-gray-300 px-3 py-1 text-sm"
                   >
                     Cancel
                   </button>

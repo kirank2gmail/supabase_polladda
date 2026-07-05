@@ -1,3 +1,4 @@
+import { Award } from "lucide-react";
 import type { HeroStat } from "../api/types";
 
 const CARDS: { key: string; label: string; icon: string; unit: string }[] = [
@@ -11,7 +12,9 @@ export function HeroCards({ heroes }: { heroes: Record<string, HeroStat> }) {
 
   return (
     <div className="mb-4">
-      <h3 className="mb-2 text-lg font-bold">🎖️ Highlights</h3>
+      <h3 className="mb-2 flex items-center gap-2 text-lg font-bold">
+        <Award size={18} /> Highlights
+      </h3>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {CARDS.map(({ key, label, icon, unit }) => {
           const hero = heroes[key];

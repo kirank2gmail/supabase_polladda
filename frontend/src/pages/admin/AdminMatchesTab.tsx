@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Plus, Upload, Eye, FileUp, Trash2 } from "lucide-react";
 import * as tournamentsApi from "../../api/tournaments";
 import * as matchesApi from "../../api/matches";
 import { ApiError } from "../../api/client";
@@ -68,19 +69,19 @@ export function AdminMatchesTab() {
       <div className="mb-4 flex gap-2">
         <button
           onClick={() => setMode("single")}
-          className={`rounded px-3 py-1.5 text-sm font-medium ${
+          className={`btn-raised flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium ${
             mode === "single" ? "bg-[#28324f] text-white" : "border border-gray-300"
           }`}
         >
-          ➕ Add Single Match
+          <Plus size={14} /> Add Single Match
         </button>
         <button
           onClick={() => setMode("bulk")}
-          className={`rounded px-3 py-1.5 text-sm font-medium ${
+          className={`btn-raised flex items-center gap-1.5 rounded px-3 py-1.5 text-sm font-medium ${
             mode === "bulk" ? "bg-[#28324f] text-white" : "border border-gray-300"
           }`}
         >
-          📤 Bulk Upload CSV
+          <Upload size={14} /> Bulk Upload CSV
         </button>
       </div>
 
@@ -212,7 +213,7 @@ function SingleMatchForm({
         onChange={(e) => setOptions(e.target.value)}
         className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
       />
-      {options && optionsError && <p className="text-sm text-red-600">{optionsError}</p>}
+      {options && optionsError && <p className="text-sm text-rose-600">{optionsError}</p>}
       {options && !optionsError && (
         <p className="text-sm text-green-700">
           {options.split("|").filter(Boolean).length} options:{" "}
@@ -255,12 +256,12 @@ function SingleMatchForm({
           : `Fixed: Winners get +${fixedOdds} pts each. Losers = -1 -> bank.`}
       </p>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-rose-600">{error}</p>}
       {success && <p className="text-sm text-green-700">{success}</p>}
 
       <button
         onClick={handleSubmit}
-        className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
+        className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
       >
         Add Match
       </button>
@@ -315,12 +316,22 @@ function BulkUploadForm({
         options auto-filled from title if left blank · scoring_mode: ratio/fixed · poll_mode:
         closed/open
       </p>
-      <input
-        type="file"
-        accept=".csv"
-        onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
-        className="text-sm"
-      />
+      <div className="flex items-center gap-2">
+        <label
+          htmlFor="bulk-csv-file"
+          className="btn-raised flex cursor-pointer items-center gap-1.5 rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+        >
+          <FileUp size={14} /> Choose File
+        </label>
+        <input
+          id="bulk-csv-file"
+          type="file"
+          accept=".csv"
+          onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+          className="hidden"
+        />
+        <span className="text-sm text-gray-500">{file ? file.name : "No file chosen"}</span>
+      </div>
 
       {previewRows.length > 0 && (
         <div className="overflow-x-auto rounded border border-gray-200">
@@ -341,7 +352,7 @@ function BulkUploadForm({
       )}
 
       {error && (
-        <div className="rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">
+        <div className="rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">
           {typeof error === "string" ? error : JSON.stringify(error)}
         </div>
       )}
@@ -363,7 +374,7 @@ function BulkUploadForm({
       <button
         onClick={handleImport}
         disabled={!file}
-        className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439] disabled:opacity-50"
+        className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439] disabled:opacity-50"
       >
         Import All
       </button>
@@ -406,15 +417,15 @@ function MatchRow({ match, onDeleted }: { match: MatchOut; onDeleted: () => void
             {match.poll_mode} · Status: {match.status}
             {match.result ? ` · Result: ${match.result}` : ""}
           </p>
-          <button onClick={toggleVotes} className="mt-1 text-xs text-[#28324f] hover:underline">
-            👁 {showVotes ? "Hide votes" : "View votes"}
+          <button onClick={toggleVotes} className="mt-1 flex items-center gap-1 text-xs text-[#28324f] hover:underline">
+            <Eye size={12} /> {showVotes ? "Hide votes" : "View votes"}
           </button>
         </div>
         <button
           onClick={() => setConfirmDelete(!confirmDelete)}
-          className="text-red-500 hover:text-red-700"
+          className="flex items-center gap-1 text-rose-500 hover:text-rose-700"
         >
-          🗑️ Delete
+          <Trash2 size={14} /> Delete
         </button>
       </div>
 
@@ -428,9 +439,9 @@ function MatchRow({ match, onDeleted }: { match: MatchOut; onDeleted: () => void
               </span>
               <button
                 onClick={() => handleDeleteVote(v.user_id)}
-                className="text-red-500 hover:text-red-700"
+                className="text-rose-500 hover:text-rose-700"
               >
-                🗑️
+                <Trash2 size={14} />
               </button>
             </div>
           ))}
@@ -443,13 +454,13 @@ function MatchRow({ match, onDeleted }: { match: MatchOut; onDeleted: () => void
           <div className="flex gap-2">
             <button
               onClick={handleDeleteMatch}
-              className="rounded bg-red-600 px-3 py-1 text-sm text-white"
+              className="btn-raised rounded bg-rose-600 px-3 py-1 text-sm text-white"
             >
               Yes
             </button>
             <button
               onClick={() => setConfirmDelete(false)}
-              className="rounded border border-gray-300 px-3 py-1 text-sm"
+              className="btn-raised rounded border border-gray-300 px-3 py-1 text-sm"
             >
               No
             </button>

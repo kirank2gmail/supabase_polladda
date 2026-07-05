@@ -1,5 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import {
+  Home as HomeIcon,
+  CalendarClock,
+  Hourglass,
+  ClipboardList,
+  Trophy,
+  MapPin,
+  Calendar,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Circle,
+} from "lucide-react";
 import { getHome } from "../api/home";
 import { getMatches } from "../api/matches";
 import { getTournaments } from "../api/tournaments";
@@ -8,7 +22,7 @@ import type { HomeMatchOut, HomeResponse, Tournament } from "../api/types";
 const SEVERITY_STYLES: Record<string, string> = {
   success: "bg-green-50 text-green-700 border-green-200",
   warning: "bg-yellow-50 text-yellow-700 border-yellow-200",
-  error: "bg-red-50 text-red-700 border-red-200",
+  error: "bg-rose-50 text-rose-700 border-rose-200",
 };
 
 export function HomePage() {
@@ -61,7 +75,9 @@ export function HomePage() {
 
   return (
     <div className="mx-auto max-w-5xl p-4">
-      <h1 className="mb-4 text-xl font-bold">🏠 Home</h1>
+      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
+        <HomeIcon size={20} /> Home
+      </h1>
 
       {tournaments.length > 0 && (
         <select
@@ -78,12 +94,13 @@ export function HomePage() {
       )}
 
       {loading && <p className="text-gray-500">Loading…</p>}
-      {error && <p className="text-red-600">{error}</p>}
+      {error && <p className="text-rose-600">{error}</p>}
 
       {!loading && !error && data && (
         <>
           <Section
-            title={`📌 Upcoming Matches (${data.upcoming.length})`}
+            icon={CalendarClock}
+            title={`Upcoming Matches (${data.upcoming.length})`}
             emptyLabel="No upcoming matches."
           >
             {data.upcoming.map((c) => (
@@ -92,7 +109,8 @@ export function HomePage() {
           </Section>
 
           <Section
-            title={`⏳ In Progress (${data.in_progress.length})`}
+            icon={Hourglass}
+            title={`In Progress (${data.in_progress.length})`}
             subtitle="Voting closed — result not yet updated by admin."
             emptyLabel="No matches awaiting result."
           >
@@ -102,7 +120,8 @@ export function HomePage() {
           </Section>
 
           <Section
-            title={`📋 Past Matches (${data.completed.length})`}
+            icon={ClipboardList}
+            title={`Past Matches (${data.completed.length})`}
             emptyLabel="No completed matches yet."
           >
             {data.completed.map((c) => (
@@ -113,9 +132,9 @@ export function HomePage() {
           <div className="mt-4 flex justify-center">
             <button
               onClick={() => navigate("/leaderboard")}
-              className="rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white hover:bg-[#1c2439]"
+              className="btn-raised flex items-center gap-2 rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white hover:bg-[#1c2439]"
             >
-              🏅 View Full Leaderboard
+              <Trophy size={16} /> View Full Leaderboard
             </button>
           </div>
         </>
@@ -125,11 +144,13 @@ export function HomePage() {
 }
 
 function Section({
+  icon: Icon,
   title,
   subtitle,
   emptyLabel,
   children,
 }: {
+  icon: React.ComponentType<{ size?: number }>;
   title: string;
   subtitle?: string;
   emptyLabel: string;
@@ -137,7 +158,9 @@ function Section({
 }) {
   return (
     <div className="mb-5">
-      <h2 className="mb-1 text-lg font-bold">{title}</h2>
+      <h2 className="mb-1 flex items-center gap-2 text-lg font-bold">
+        <Icon size={18} /> {title}
+      </h2>
       {subtitle && <p className="mb-2 text-sm text-gray-500">{subtitle}</p>}
       {children.length === 0 ? (
         <p className="text-sm text-gray-500">{emptyLabel}</p>
@@ -165,9 +188,13 @@ function UpcomingCard({
       <div>
         <p className="font-semibold">{match.title}</p>
         <p className="text-xs text-gray-500">
-          📍 {match.location} 📅 {times.local}
+          <span className="inline-flex items-center gap-1"><MapPin size={12} /> {match.location}</span> <span className="inline-flex items-center gap-1"><Calendar size={12} /> {times.local}</span>
         </p>
-        {times.user && <p className="text-xs text-gray-500">🕐 Your time: {times.user}</p>}
+        {times.user && (
+          <p className="flex items-center gap-1 text-xs text-gray-500">
+            <Clock size={12} /> Your time: {times.user}
+          </p>
+        )}
       </div>
       <div>
         {countdown && (
@@ -177,10 +204,14 @@ function UpcomingCard({
         )}
       </div>
       <div className="text-right">
-        {my_vote && <p className="mb-1 text-sm">Your vote: <b>{my_vote}</b> ✅</p>}
+        {my_vote && (
+          <p className="mb-1 flex items-center justify-end gap-1 text-sm">
+            Your vote: <b>{my_vote}</b> <CheckCircle2 size={14} className="text-green-700" />
+          </p>
+        )}
         <button
           onClick={() => onClick(match.match_id)}
-          className="rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
+          className="btn-raised rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
         >
           {my_vote ? "Change →" : "Vote Now →"}
         </button>
@@ -202,21 +233,27 @@ function InProgressCard({
       <div>
         <p className="font-semibold">{match.title}</p>
         <p className="text-xs text-gray-500">
-          📍 {match.location} 📅 {times.local}
+          <span className="inline-flex items-center gap-1"><MapPin size={12} /> {match.location}</span> <span className="inline-flex items-center gap-1"><Calendar size={12} /> {times.local}</span>
         </p>
       </div>
       <div className="text-sm">
         {my_vote ? (
-          <p>You voted: <b>{my_vote}</b> ✅</p>
+          <p className="flex items-center gap-1">
+            You voted: <b>{my_vote}</b> <CheckCircle2 size={14} className="text-green-700" />
+          </p>
         ) : (
-          <p className="text-gray-500">⚠️ No vote cast</p>
+          <p className="flex items-center gap-1 text-gray-500">
+            <AlertTriangle size={14} /> No vote cast
+          </p>
         )}
-        <p className="text-xs text-red-600">🔴 Poll closed — awaiting result</p>
+        <p className="flex items-center gap-1 text-xs text-rose-600">
+          <Circle size={8} className="fill-rose-600 text-rose-600" /> Poll closed — awaiting result
+        </p>
       </div>
       <div className="text-right">
         <button
           onClick={() => onClick(match.match_id)}
-          className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+          className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
         >
           View Votes →
         </button>
@@ -235,31 +272,38 @@ function CompletedCard({
   const { match, times, my_vote, my_points, correct } = card;
   const pts = my_points ?? 0;
   const ptsStr = pts > 0 ? `+${pts.toFixed(2)}` : pts.toFixed(2);
-  const ptsClass = pts > 0 ? "text-green-700" : pts < 0 ? "text-red-700" : "text-gray-600";
+  const ptsClass = pts > 0 ? "text-green-700" : pts < 0 ? "text-rose-700" : "text-gray-600";
 
   return (
     <div className="grid grid-cols-1 gap-2 py-3 sm:grid-cols-[4fr_3fr_2fr] sm:items-center">
       <div>
         <p className="font-semibold">{match.title}</p>
         <p className="text-xs text-gray-500">
-          📍 {match.location} 📅 {times.local}
+          <span className="inline-flex items-center gap-1"><MapPin size={12} /> {match.location}</span> <span className="inline-flex items-center gap-1"><Calendar size={12} /> {times.local}</span>
         </p>
       </div>
       <div className="text-sm">
         <p>Result: <b>{match.result}</b></p>
         {my_vote ? (
-          <p className="text-gray-500">
-            Your vote: {my_vote} {correct ? "✅" : "❌"}
+          <p className="flex items-center gap-1 text-gray-500">
+            Your vote: {my_vote}{" "}
+            {correct ? (
+              <CheckCircle2 size={14} className="text-green-700" />
+            ) : (
+              <XCircle size={14} className="text-rose-700" />
+            )}
           </p>
         ) : (
-          <p className="text-gray-500">⚠️ No vote cast</p>
+          <p className="flex items-center gap-1 text-gray-500">
+            <AlertTriangle size={14} /> No vote cast
+          </p>
         )}
       </div>
       <div className="text-right">
         <p className={`mb-1 text-sm font-bold ${ptsClass}`}>{ptsStr} pts</p>
         <button
           onClick={() => onClick(match.match_id)}
-          className="rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+          className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
         >
           Details →
         </button>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trash2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import * as usersApi from "../../api/users";
 import { ApiError } from "../../api/client";
 import type { User } from "../../api/types";
@@ -107,13 +108,13 @@ export function AdminUsersTab() {
           onChange={(e) => setPw2(e.target.value)}
           className="rounded border border-gray-300 px-3 py-2 text-sm"
         />
-        {createError && <p className="col-span-2 text-sm text-red-600">{createError}</p>}
+        {createError && <p className="col-span-2 text-sm text-rose-600">{createError}</p>}
         {createSuccess && (
           <p className="col-span-2 text-sm text-green-700">{createSuccess}</p>
         )}
         <button
           onClick={handleCreate}
-          className="col-span-2 rounded bg-[#28324f] py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
+          className="btn-raised col-span-2 rounded bg-[#28324f] py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Create User
         </button>
@@ -134,18 +135,26 @@ export function AdminUsersTab() {
                     <p className="font-semibold">
                       {u.username} — nickname: <span className="font-normal">{u.nickname}</span>
                     </p>
-                    <p className="text-xs text-gray-500">
+                    <p className="flex items-center gap-1 text-xs text-gray-500">
                       ID: {u.user_id} ·{" "}
-                      {u.must_change_password ? "⚠️ Must change password" : "✅ Password set"}
+                      {u.must_change_password ? (
+                        <span className="inline-flex items-center gap-1">
+                          <AlertTriangle size={11} /> Must change password
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          <CheckCircle2 size={11} /> Password set
+                        </span>
+                      )}
                     </p>
                   </div>
                   {!isSelf && (
                     <button
                       onClick={() => setDeleteTarget(deleteTarget === u.user_id ? null : u.user_id)}
-                      className="text-red-500 hover:text-red-700"
+                      className="text-rose-500 hover:text-rose-700"
                       title="Delete user"
                     >
-                      🗑️
+                      <Trash2 size={16} />
                     </button>
                   )}
                 </div>
@@ -172,7 +181,7 @@ export function AdminUsersTab() {
                       />
                       <button
                         onClick={() => handleResetPassword(u.user_id)}
-                        className="rounded bg-[#28324f] px-3 py-1 text-sm text-white"
+                        className="btn-raised rounded bg-[#28324f] px-3 py-1 text-sm text-white"
                       >
                         Reset
                       </button>
@@ -189,14 +198,14 @@ export function AdminUsersTab() {
                   ) : (
                     <button
                       onClick={() => setResetTarget(u.user_id)}
-                      className="rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100"
+                      className="btn-raised rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100"
                     >
                       Reset password
                     </button>
                   )}
                 </div>
                 {resetTarget === u.user_id && resetError && (
-                  <p className="mt-1 text-sm text-red-600">{resetError}</p>
+                  <p className="mt-1 text-sm text-rose-600">{resetError}</p>
                 )}
 
                 {deleteTarget === u.user_id && (
@@ -205,13 +214,13 @@ export function AdminUsersTab() {
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleDelete(u.user_id)}
-                        className="rounded bg-red-600 px-3 py-1 text-sm text-white"
+                        className="btn-raised rounded bg-rose-600 px-3 py-1 text-sm text-white"
                       >
                         Yes
                       </button>
                       <button
                         onClick={() => setDeleteTarget(null)}
-                        className="rounded border border-gray-300 px-3 py-1 text-sm"
+                        className="btn-raised rounded border border-gray-300 px-3 py-1 text-sm"
                       >
                         Cancel
                       </button>

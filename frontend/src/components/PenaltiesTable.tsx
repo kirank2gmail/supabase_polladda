@@ -1,3 +1,4 @@
+import { Coins } from "lucide-react";
 import type { PenaltyOut } from "../api/types";
 
 export function PenaltiesTable({ penalties }: { penalties: PenaltyOut[] }) {
@@ -5,7 +6,9 @@ export function PenaltiesTable({ penalties }: { penalties: PenaltyOut[] }) {
 
   return (
     <div className="mt-4">
-      <h4 className="mb-2 font-bold">💸 Manual Penalties</h4>
+      <h4 className="mb-2 flex items-center gap-1.5 font-bold">
+        <Coins size={16} /> Manual Penalties
+      </h4>
       <div className="max-h-80 overflow-auto rounded-md border border-gray-200">
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0">
@@ -20,7 +23,7 @@ export function PenaltiesTable({ penalties }: { penalties: PenaltyOut[] }) {
             {penalties.map((p) => (
               <tr key={p.penalty_id} className="border-b border-gray-100">
                 <td className="px-3 py-2 font-semibold">{p.player_name}</td>
-                <td className="px-3 py-2 font-bold text-red-700">
+                <td className="px-3 py-2 font-bold text-rose-700">
                   -{p.points.toFixed(2)}
                 </td>
                 <td className="px-3 py-2 text-gray-600">{p.reason}</td>

@@ -1,16 +1,19 @@
-// Line-for-line TS port of data/leaderboard_builder.py's cell_text()/
-// cell_colours() — same branch order, so React never disagrees with
-// Streamlit on a cell's displayed text or color for the same value.
+// TS port of data/leaderboard_builder.py's cell_text()/cell_colours() — same
+// branch order, so React never disagrees with Streamlit on a cell's
+// displayed text for the same value. The colors themselves are a
+// deliberate, React-only divergence (softened from Streamlit's original
+// jewel tones to a gentler, still-accessible palette) — same precedent as
+// the earlier background-tinting removal in LeaderboardTable.tsx.
 import type { CellValue } from "../api/types";
 
 const COLOURS: Record<string, [string, string | null]> = {
-  win: ["#0e6e24", "#d1f0d7"],
-  loss: ["#a01414", "#fcd7d7"],
-  miss: ["#8c5500", "#fff3cd"],
-  aband: ["#777777", "#e0e0e0"],
-  quit: ["#5a3e8a", "#e8e0f0"],
-  neu: ["#555555", null],
-  black: ["#111111", null],
+  win: ["#15803d", "#dcfce7"],   // green-700 / green-100
+  loss: ["#be123c", "#ffe4e6"],  // rose-700 / rose-100
+  miss: ["#b45309", "#fef3c7"],  // amber-700 / amber-100
+  aband: ["#6b7280", "#f3f4f6"], // gray-500 / gray-100
+  quit: ["#6d28d9", "#f3e8ff"],  // violet-700 / violet-100
+  neu: ["#4b5563", null],        // gray-600
+  black: ["#1f2937", null],      // gray-800
 };
 
 export function cellText(val: CellValue): string {

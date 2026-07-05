@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { User } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { changePassword, getTimezones, updateNickname, updateTimezone } from "../api/auth";
 
@@ -7,7 +8,9 @@ export function ProfilePage() {
 
   return (
     <div className="mx-auto max-w-xl p-4">
-      <h1 className="mb-4 text-xl font-bold">👤 My Profile</h1>
+      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
+        <User size={20} /> My Profile
+      </h1>
       {user && (
         <div className="space-y-4">
           <NicknameCard nickname={user.nickname} onSaved={refreshUser} />
@@ -71,13 +74,13 @@ function NicknameCard({
         <button
           disabled={saving}
           onClick={save}
-          className="rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
           Save
         </button>
       </div>
       {message && (
-        <p className={`mt-2 text-sm ${message.ok ? "text-green-700" : "text-red-600"}`}>
+        <p className={`mt-2 text-sm ${message.ok ? "text-green-700" : "text-rose-600"}`}>
           {message.text}
         </p>
       )}
@@ -143,13 +146,13 @@ function PasswordCard() {
         <button
           disabled={saving}
           onClick={save}
-          className="rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
           Update Password
         </button>
       </div>
       {message && (
-        <p className={`mt-2 text-sm ${message.ok ? "text-green-700" : "text-red-600"}`}>
+        <p className={`mt-2 text-sm ${message.ok ? "text-green-700" : "text-rose-600"}`}>
           {message.text}
         </p>
       )}
@@ -211,13 +214,13 @@ function TimezoneCard({
         <button
           disabled={saving}
           onClick={save}
-          className="rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
         >
           Save
         </button>
       </div>
       {message && (
-        <p className={`mt-2 text-sm ${message.ok ? "text-green-700" : "text-red-600"}`}>
+        <p className={`mt-2 text-sm ${message.ok ? "text-green-700" : "text-rose-600"}`}>
           {message.text}
         </p>
       )}

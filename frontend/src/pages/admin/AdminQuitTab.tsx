@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { Circle, Ban, CheckCircle2 } from "lucide-react";
 import * as tournamentsApi from "../../api/tournaments";
 import * as quitApi from "../../api/quit";
+import { ApiError } from "../../api/client";
 import type { MatchLabelOut, MissFloorStatus, PlayerStatusOut, Tournament } from "../../api/types";
 
 export function AdminQuitTab() {
@@ -9,7 +11,6 @@ export function AdminQuitTab() {
   const [players, setPlayers] = useState<PlayerStatusOut[]>([]);
   const [matches, setMatches] = useState<MatchLabelOut[]>([]);
   const [floorStatus, setFloorStatus] = useState<MissFloorStatus | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     tournamentsApi.getTournaments().then((ts) => {
@@ -51,12 +52,6 @@ export function AdminQuitTab() {
     <div>
       <TournamentSelect tournaments={tournaments} selected={selected} onChange={setSelected} />
 
-      {message && (
-        <div className="mb-4 rounded border border-green-300 bg-green-50 p-2 text-sm text-green-800">
-          {message}
-        </div>
-      )}
-
       <h2 className="mb-2 text-lg font-bold">Current Player Status</h2>
       <div className="mb-6 overflow-x-auto rounded-lg border border-gray-200">
         <table className="w-full text-sm">
@@ -73,7 +68,15 @@ export function AdminQuitTab() {
               <tr key={p.user_id} className="border-t border-gray-100">
                 <td className="px-3 py-2 font-semibold">{p.name}</td>
                 <td className="px-3 py-2">
-                  {p.has_quit_records ? `🔴 Quit from: ${p.quit_since_label}` : "🟢 Active"}
+                  {p.has_quit_records ? (
+                    <span className="inline-flex items-center gap-1 text-rose-600">
+                      <Circle size={8} className="fill-rose-600 text-rose-600" /> Quit from: {p.quit_since_label}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-green-700">
+                      <Circle size={8} className="fill-green-700 text-green-700" /> Active
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2 text-right">{p.active_matches}</td>
                 <td className="px-3 py-2 text-right">{p.quit_matches}</td>
@@ -87,28 +90,19 @@ export function AdminQuitTab() {
         tournamentId={selected}
         activePlayers={activePlayers}
         matches={matches}
-        onDone={(msg) => {
-          setMessage(msg);
-          reload();
-        }}
+        onDone={reload}
       />
       <ReinstateForm
         tournamentId={selected}
         quitPlayers={quitPlayers}
         matches={matches}
-        onDone={(msg) => {
-          setMessage(msg);
-          reload();
-        }}
+        onDone={reload}
       />
       <MissFloorSection
         tournamentId={selected}
         status={floorStatus}
         matches={matches}
-        onDone={(msg) => {
-          setMessage(msg);
-          reload();
-        }}
+        onDone={reload}
       />
     </div>
   );
@@ -147,10 +141,12 @@ function QuitForm({
   tournamentId: string;
   activePlayers: PlayerStatusOut[];
   matches: MatchLabelOut[];
-  onDone: (msg: string) => void;
+  onDone: () => void;
 }) {
   const [userId, setUserId] = useState(activePlayers[0]?.user_id ?? "");
   const [matchId, setMatchId] = useState(matches[matches.length - 1]?.match_id ?? "");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!userId && activePlayers.length > 0) setUserId(activePlayers[0].user_id);
@@ -167,13 +163,20 @@ function QuitForm({
   }
 
   const handleQuit = async () => {
-    const r = await quitApi.quitPlayer(tournamentId, userId, matchId);
-    const name = activePlayers.find((p) => p.user_id === userId)?.name ?? userId;
-    onDone(
-      r.updated === 0
-        ? `No match_players records found for ${name} at or after the selected match.`
-        : `${name} marked as quit — ${r.updated} record(s) updated. Run Recalculate Tournament to apply to points.`
-    );
+    setMessage(null);
+    setError(null);
+    try {
+      const r = await quitApi.quitPlayer(tournamentId, userId, matchId);
+      const name = activePlayers.find((p) => p.user_id === userId)?.name ?? userId;
+      setMessage(
+        r.updated === 0
+          ? `No match_players records found for ${name} at or after the selected match.`
+          : `${name} marked as quit — ${r.updated} record(s) updated. Run Recalculate Tournament to apply to points.`
+      );
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not mark player as quit.");
+    }
   };
 
   return (
@@ -207,11 +210,21 @@ function QuitForm({
         </select>
         <button
           onClick={handleQuit}
-          className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
+          className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Mark as Quit
         </button>
       </div>
+      {message && (
+        <div className="mt-3 rounded border border-green-300 bg-green-50 p-2 text-sm text-green-800">
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="mt-3 rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -225,10 +238,12 @@ function ReinstateForm({
   tournamentId: string;
   quitPlayers: PlayerStatusOut[];
   matches: MatchLabelOut[];
-  onDone: (msg: string) => void;
+  onDone: () => void;
 }) {
   const [userId, setUserId] = useState(quitPlayers[0]?.user_id ?? "");
   const [matchId, setMatchId] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (quitPlayers.length === 0) return;
@@ -247,11 +262,18 @@ function ReinstateForm({
   }
 
   const handleReinstate = async () => {
-    const r = await quitApi.reinstatePlayer(tournamentId, userId, matchId);
-    const name = quitPlayers.find((p) => p.user_id === userId)?.name ?? userId;
-    onDone(
-      `${name} reinstated — ${r.removed} quit record(s) removed, match_players rebuilt. Run Recalculate Tournament to apply to points.`
-    );
+    setMessage(null);
+    setError(null);
+    try {
+      const r = await quitApi.reinstatePlayer(tournamentId, userId, matchId);
+      const name = quitPlayers.find((p) => p.user_id === userId)?.name ?? userId;
+      setMessage(
+        `${name} reinstated — ${r.removed} quit record(s) removed, match_players rebuilt. Run Recalculate Tournament to apply to points.`
+      );
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not reinstate player.");
+    }
   };
 
   return (
@@ -289,11 +311,21 @@ function ReinstateForm({
         </select>
         <button
           onClick={handleReinstate}
-          className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
+          className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
         >
           Reinstate
         </button>
       </div>
+      {message && (
+        <div className="mt-3 rounded border border-green-300 bg-green-50 p-2 text-sm text-green-800">
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="mt-3 rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -307,42 +339,60 @@ function MissFloorSection({
   tournamentId: string;
   status: MissFloorStatus | null;
   matches: MatchLabelOut[];
-  onDone: (msg: string) => void;
+  onDone: () => void;
 }) {
   const [matchId, setMatchId] = useState(matches[0]?.match_id ?? "");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!matchId && matches.length > 0) setMatchId(matches[0].match_id);
   }, [matches, matchId]);
 
   const handleApply = async () => {
-    const r = await quitApi.applyMissFloor(tournamentId, matchId);
-    onDone(
-      `Miss floor applied — ${r.written} synthetic record(s) written. Run Recalculate Tournament to apply to points.`
-    );
+    setMessage(null);
+    setError(null);
+    try {
+      const r = await quitApi.applyMissFloor(tournamentId, matchId);
+      setMessage(
+        `Miss floor applied — ${r.written} synthetic record(s) written. Run Recalculate Tournament to apply to points.`
+      );
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not apply miss floor.");
+    }
   };
 
   const handleRemove = async () => {
-    const r = await quitApi.removeMissFloor(tournamentId);
-    onDone(`Miss floor removed — ${r.removed} record(s) deleted. Run Recalculate Tournament to apply.`);
+    setMessage(null);
+    setError(null);
+    try {
+      const r = await quitApi.removeMissFloor(tournamentId);
+      setMessage(`Miss floor removed — ${r.removed} record(s) deleted. Run Recalculate Tournament to apply.`);
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Could not remove miss floor.");
+    }
   };
 
   return (
     <div className="rounded-lg border border-gray-200 p-4">
-      <h2 className="mb-1 text-lg font-bold">🚫 Miss Floor (Knockout Stage)</h2>
+      <h2 className="mb-1 flex items-center gap-2 text-lg font-bold">
+        <Ban size={18} /> Miss Floor (Knockout Stage)
+      </h2>
       <p className="mb-3 text-sm text-gray-500">
         Max out every active player's free-miss allowance from a chosen match onwards.
       </p>
 
       {status ? (
         <div>
-          <p className="mb-2 text-sm text-blue-800">
-            ✅ Miss floor active from {status.label} — {status.player_count} player(s),{" "}
+          <p className="mb-2 flex items-center gap-1 text-sm text-blue-800">
+            <CheckCircle2 size={14} /> Miss floor active from {status.label} — {status.player_count} player(s),{" "}
             {status.record_count} synthetic record(s).
           </p>
           <button
             onClick={handleRemove}
-            className="rounded border border-gray-300 px-4 py-2 text-sm font-semibold hover:bg-gray-100"
+            className="btn-raised rounded border border-gray-300 px-4 py-2 text-sm font-semibold hover:bg-gray-100"
           >
             Remove Miss Floor
           </button>
@@ -363,10 +413,20 @@ function MissFloorSection({
           </select>
           <button
             onClick={handleApply}
-            className="rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
+            className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-semibold text-white hover:bg-[#1c2439]"
           >
             Apply Miss Floor
           </button>
+        </div>
+      )}
+      {message && (
+        <div className="mt-3 rounded border border-green-300 bg-green-50 p-2 text-sm text-green-800">
+          {message}
+        </div>
+      )}
+      {error && (
+        <div className="mt-3 rounded border border-rose-300 bg-rose-50 p-2 text-sm text-rose-700">
+          {error}
         </div>
       )}
     </div>

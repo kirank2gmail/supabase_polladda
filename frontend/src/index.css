@@ -1,8 +1,18 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
 
 body {
   margin: 0;
-  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  font-family: "Inter Variable", system-ui, "Segoe UI", Roboto, sans-serif;
+  font-feature-settings: "cv05", "cv11"; /* Inter's more legible alternates: single-story 'a', open '4' */
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+  color: #1f2937; /* gray-800 — softer than pure black, still high-contrast */
+}
+
+h1, h2, h3 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 /* Used by LeaderboardTable's split fixed/scrolling tables: hides the
@@ -16,4 +26,23 @@ body {
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none; /* Chrome/Safari/newer Edge */
+}
+
+/* Applied to every clickable button across the app for a subtle "raised"
+   feel: soft shadow at rest, slightly deeper on hover, flattens with a
+   1px press on click. Only touches shadow/transform — never overrides a
+   button's own color/padding/sizing classes. */
+.btn-raised {
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.08), 0 1px 1px 0 rgba(0, 0, 0, 0.04);
+  transition: box-shadow 150ms ease, transform 100ms ease;
+}
+.btn-raised:hover:not(:disabled) {
+  box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.12), 0 2px 4px 0 rgba(0, 0, 0, 0.08);
+}
+.btn-raised:active:not(:disabled) {
+  box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.06);
+  transform: translateY(1px);
+}
+.btn-raised:disabled {
+  box-shadow: none;
 }

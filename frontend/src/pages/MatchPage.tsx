@@ -1,5 +1,17 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import {
+  MapPin,
+  Calendar,
+  Clock,
+  PauseCircle,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  BarChart3,
+  User,
+  Trophy,
+} from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { getMatches } from "../api/matches";
 import { getMatchDetail, castVote, getPollSummary, getResultBreakdown } from "../api/votes";
@@ -17,7 +29,7 @@ interface NavState {
 const SEVERITY_STYLES: Record<string, string> = {
   success: "bg-green-50 text-green-700 border-green-200",
   warning: "bg-yellow-50 text-yellow-700 border-yellow-200",
-  error: "bg-red-50 text-red-700 border-red-200",
+  error: "bg-rose-50 text-rose-700 border-rose-200",
 };
 
 export function MatchPage() {
@@ -34,6 +46,8 @@ export function MatchPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [voting, setVoting] = useState(false);
+  const [voteError, setVoteError] = useState<string | null>(null);
+  const [voteSuccess, setVoteSuccess] = useState<string | null>(null);
 
   const isAdmin = user?.role === "admin";
 
@@ -82,12 +96,14 @@ export function MatchPage() {
   const handleVote = async (option: string) => {
     if (!matchId) return;
     setVoting(true);
-    setError(null);
+    setVoteError(null);
+    setVoteSuccess(null);
     try {
       await castVote(matchId, option);
       await refetchAfterVote();
+      setVoteSuccess(`Vote placed for ${option} ✅`);
     } catch (e) {
-      setError(String(e));
+      setVoteError(String(e));
     } finally {
       setVoting(false);
     }
@@ -97,10 +113,10 @@ export function MatchPage() {
     return <div className="mx-auto max-w-3xl p-4 text-gray-500">Loading…</div>;
   }
   if (error && !detail) {
-    return <div className="mx-auto max-w-3xl p-4 text-red-600">{error}</div>;
+    return <div className="mx-auto max-w-3xl p-4 text-rose-600">{error}</div>;
   }
   if (!detail || !matchId) {
-    return <div className="mx-auto max-w-3xl p-4 text-red-600">Match not found.</div>;
+    return <div className="mx-auto max-w-3xl p-4 text-rose-600">Match not found.</div>;
   }
 
   const { match, times, countdown, my_vote } = detail;
@@ -124,15 +140,15 @@ export function MatchPage() {
 
       <div className="mb-3 grid grid-cols-3 gap-3 text-sm">
         <div>
-          <p className="text-gray-400">📍 Location</p>
+          <p className="flex items-center gap-1 text-gray-400"><MapPin size={12} /> Location</p>
           <p className="font-semibold">{match.location}</p>
         </div>
         <div>
-          <p className="text-gray-400">📅 Date</p>
+          <p className="flex items-center gap-1 text-gray-400"><Calendar size={12} /> Date</p>
           <p className="font-semibold">{match.match_date}</p>
         </div>
         <div>
-          <p className="text-gray-400">🕐 Local</p>
+          <p className="flex items-center gap-1 text-gray-400"><Clock size={12} /> Local</p>
           <p className="font-semibold">
             {match.start_time} {match.timezone.split("/").pop()}
           </p>
@@ -152,19 +168,19 @@ export function MatchPage() {
 
       <hr className="my-4 border-gray-200" />
 
-      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-
       {match.is_voting_open ? (
         <VotingSection
           options={options}
           myVote={my_vote?.vote ?? null}
           voting={voting}
           onVote={handleVote}
+          voteError={voteError}
+          voteSuccess={voteSuccess}
         />
       ) : (
         match.status === "upcoming" && (
-          <p className="mb-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
-            ⏸️ Voting closed — result pending from admin.
+          <p className="mb-4 flex items-center gap-1 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+            <PauseCircle size={14} /> Voting closed — result pending from admin.
           </p>
         )
       )}
@@ -198,21 +214,21 @@ function NavBar({
     <div className="mb-4 grid grid-cols-[2fr_1fr_1fr] gap-2">
       <button
         onClick={onBack}
-        className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
+        className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
       >
         ← Back to Matches
       </button>
       <button
         onClick={onPrev}
         disabled={!onPrev}
-        className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+        className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
       >
         ◀ Previous
       </button>
       <button
         onClick={onNext}
         disabled={!onNext}
-        className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+        className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
       >
         Next ▶
       </button>
@@ -225,11 +241,15 @@ function VotingSection({
   myVote,
   voting,
   onVote,
+  voteError,
+  voteSuccess,
 }: {
   options: string[];
   myVote: string | null;
   voting: boolean;
   onVote: (option: string) => void;
+  voteError: string | null;
+  voteSuccess: string | null;
 }) {
   const [choice, setChoice] = useState(myVote ?? options[0] ?? "");
 
@@ -248,13 +268,19 @@ function VotingSection({
               key={opt}
               disabled={voting}
               onClick={() => onVote(opt)}
-              className={`rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
+              className={`btn-raised rounded px-4 py-2 text-sm font-medium disabled:opacity-50 ${
                 myVote === opt
                   ? "bg-[#28324f] text-white"
                   : "border border-gray-300 hover:bg-gray-50"
               }`}
             >
-              {myVote === opt ? `✅ ${opt}` : opt}
+              {myVote === opt ? (
+                <span className="inline-flex items-center gap-1">
+                  <CheckCircle2 size={14} /> {opt}
+                </span>
+              ) : (
+                opt
+              )}
             </button>
           ))}
         </div>
@@ -274,11 +300,21 @@ function VotingSection({
           <button
             disabled={voting}
             onClick={() => onVote(choice)}
-            className="rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            className="btn-raised rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
             Confirm Vote
           </button>
         </div>
+      )}
+      {voteSuccess && (
+        <p className="mt-2 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+          {voteSuccess}
+        </p>
+      )}
+      {voteError && (
+        <p className="mt-2 rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600">
+          {voteError}
+        </p>
       )}
     </div>
   );
@@ -289,7 +325,9 @@ function PollSection({ poll }: { poll: PollSummaryResponse | null }) {
 
   return (
     <div>
-      <h3 className="mb-2 font-semibold">📊 Poll</h3>
+      <h3 className="mb-2 flex items-center gap-1.5 font-semibold">
+        <BarChart3 size={16} /> Poll
+      </h3>
       {!poll ? (
         <p className="text-sm text-gray-500">Poll data unavailable.</p>
       ) : poll.hidden ? (
@@ -326,8 +364,8 @@ function PollSection({ poll }: { poll: PollSummaryResponse | null }) {
               {openOption === o.option && o.voters && (
                 <ul className="mt-1 rounded border border-gray-100 bg-gray-50 p-2 text-xs">
                   {o.voters.map((v) => (
-                    <li key={v.user_id} className="py-0.5">
-                      👤 {v.name}
+                    <li key={v.user_id} className="flex items-center gap-1 py-0.5">
+                      <User size={11} /> {v.name}
                     </li>
                   ))}
                 </ul>
@@ -346,7 +384,9 @@ function ResultSection({ result }: { result: ResultBreakdownResponse }) {
 
   return (
     <div>
-      <h3 className="mb-2 font-semibold">🏆 Result: {result.result} Won</h3>
+      <h3 className="mb-2 flex items-center gap-1.5 font-semibold">
+        <Trophy size={16} /> Result: {result.result} Won
+      </h3>
       {result.winner_points > 0 && (
         <p className="mb-2 text-xs text-gray-500">
           Points awarded to correct voters: <b>+{result.winner_points}</b> each
@@ -359,8 +399,13 @@ function ResultSection({ result }: { result: ResultBreakdownResponse }) {
               onClick={() => setOpenOption(openOption === o.option ? null : o.option)}
               className="flex w-full items-center justify-between px-3 py-2 text-sm"
             >
-              <span>
-                {o.is_win ? "✅" : "❌"} <b>{o.option}</b> voters{" "}
+              <span className="inline-flex items-center gap-1">
+                {o.is_win ? (
+                  <CheckCircle2 size={14} className="text-green-700" />
+                ) : (
+                  <XCircle size={14} className="text-rose-700" />
+                )}
+                <b>{o.option}</b> voters{" "}
                 <span className="text-gray-500">
                   ({o.voters.length}) — {o.pts_label}
                 </span>
@@ -373,9 +418,9 @@ function ResultSection({ result }: { result: ResultBreakdownResponse }) {
                   <p className="text-gray-500">No votes.</p>
                 ) : (
                   o.voters.map((v) => (
-                    <p key={v.user_id} className="py-0.5">
-                      👤 <b>{v.name}</b>{" "}
-                      <span className={v.points > 0 ? "text-green-700" : "text-red-700"}>
+                    <p key={v.user_id} className="flex items-center gap-1 py-0.5">
+                      <User size={11} /> <b>{v.name}</b>{" "}
+                      <span className={v.points > 0 ? "text-green-700" : "text-rose-700"}>
                         {v.points > 0 ? `+${v.points}` : v.points} pts
                       </span>
                     </p>
@@ -393,14 +438,16 @@ function ResultSection({ result }: { result: ResultBreakdownResponse }) {
             onClick={() => setShowMissed(!showMissed)}
             className="flex w-full items-center justify-between px-3 py-2 text-sm"
           >
-            <span>⚠️ Missed / Penalised ({result.missed.length})</span>
+            <span className="flex items-center gap-1">
+              <AlertTriangle size={14} /> Missed / Penalised ({result.missed.length})
+            </span>
             <span className="text-gray-400">{showMissed ? "▲" : "▼"}</span>
           </button>
           {showMissed && (
             <div className="border-t border-gray-100 px-3 py-2 text-xs">
               {result.missed.map((p) => (
-                <p key={p.user_id} className="py-0.5">
-                  👤 <b>{p.name}</b> {p.note} — {p.points} pts
+                <p key={p.user_id} className="flex items-center gap-1 py-0.5">
+                  <User size={11} /> <b>{p.name}</b> {p.note} — {p.points} pts
                 </p>
               ))}
             </div>

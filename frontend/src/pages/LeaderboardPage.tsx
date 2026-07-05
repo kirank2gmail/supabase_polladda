@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Trophy, BarChart3, Download } from "lucide-react";
 import { getLeaderboard, getTournaments } from "../api/tournaments";
 import type { LeaderboardResponse, Tournament } from "../api/types";
 import { LeaderboardTable } from "../components/LeaderboardTable";
@@ -39,7 +40,9 @@ export function LeaderboardPage() {
 
   return (
     <div className="mx-auto max-w-5xl p-4">
-      <h1 className="mb-4 text-xl font-bold">🏅 Leaderboard</h1>
+      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
+        <Trophy size={20} /> Leaderboard
+      </h1>
 
       {tournaments.length > 0 && (
         <select
@@ -56,7 +59,7 @@ export function LeaderboardPage() {
       )}
 
       {loading && <p className="text-gray-500">Loading…</p>}
-      {error && <p className="text-red-600">{error}</p>}
+      {error && <p className="text-rose-600">{error}</p>}
 
       {!loading && !error && data && data.rows.length === 0 && (
         <p className="text-gray-500">No results recorded yet for this tournament.</p>
@@ -65,15 +68,17 @@ export function LeaderboardPage() {
       {!loading && !error && data && data.rows.length > 0 && (
         <>
           <HeroCards heroes={data.heroes} />
-          <h2 className="mb-2 text-lg font-bold">📊 Leaderboard</h2>
+          <h2 className="mb-2 flex items-center gap-1.5 text-lg font-bold">
+            <BarChart3 size={18} /> Leaderboard
+          </h2>
           <LeaderboardTable data={data} />
           <button
             onClick={() =>
               downloadCsv(`leaderboard_${selected}.csv`, buildLeaderboardCsv(data))
             }
-            className="mt-3 rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
+            className="btn-raised mt-3 flex items-center gap-1.5 rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
           >
-            ⬇️ Download CSV
+            <Download size={14} /> Download CSV
           </button>
           <PenaltiesTable penalties={data.penalties} />
           <MatchDetailsSection data={data} />

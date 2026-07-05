@@ -106,7 +106,7 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
             {rows.map((row, i) => {
               const pts = Number(row.total_points);
               const rowBg = i % 2 === 1 ? "bg-gray-50" : "bg-white";
-              const ptsFg = pts >= 0 ? "text-[#0e6e24]" : "text-[#a01414]";
+              const ptsFg = pts >= 0 ? "text-[#15803d]" : "text-[#be123c]";
               const ptsStr = pts >= 0 ? `+${pts.toFixed(2)}` : pts.toFixed(2);
 
               return (
@@ -132,7 +132,7 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
               <td className="w-[160px] px-3 py-2">Total</td>
               <td
                 className={`w-[90px] px-3 py-2 text-right ${
-                  data.grand_total >= 0 ? "text-[#0e6e24]" : "text-[#a01414]"
+                  data.grand_total >= 0 ? "text-[#15803d]" : "text-[#be123c]"
                 }`}
               >
                 {data.grand_total >= 0
@@ -164,7 +164,7 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
               {rows.map((row, i) => {
                 const rowBg = i % 2 === 1 ? "bg-gray-50" : "bg-white";
                 const missed = Number(row.missed);
-                const missFg = missed > 0 ? "text-[#8c5500]" : "text-gray-900";
+                const missFg = missed > 0 ? "text-[#b45309]" : "text-gray-900";
 
                 return (
                   <tr key={row.user_id} className={rowBg}>
@@ -200,7 +200,7 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
                 {data.col_match_ids.map((mid) => {
                   const t = data.col_totals[mid] ?? 0;
                   const color =
-                    t > 0 ? "text-[#0e6e24]" : t < 0 ? "text-[#a01414]" : "text-gray-600";
+                    t > 0 ? "text-[#15803d]" : t < 0 ? "text-[#be123c]" : "text-gray-600";
                   const val = t > 0 ? `+${t.toFixed(2)}` : t < 0 ? t.toFixed(2) : "0";
                   return (
                     <td key={mid} className={`px-3 py-2 text-right ${color}`}>
@@ -232,9 +232,9 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
         <span
           className={`font-bold ${
             data.bank > 0
-              ? "text-[#0e6e24]"
+              ? "text-[#15803d]"
               : data.bank < 0
-              ? "text-[#a01414]"
+              ? "text-[#be123c]"
               : "text-gray-600"
           }`}
         >

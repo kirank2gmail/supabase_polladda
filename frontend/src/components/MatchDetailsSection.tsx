@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Search } from "lucide-react";
 import type { LeaderboardResponse } from "../api/types";
 import { cellColours, cellText } from "../lib/cellFormat";
 
@@ -36,7 +37,9 @@ export function MatchDetailsSection({ data }: { data: LeaderboardResponse }) {
 
   return (
     <div className="mt-4">
-      <h4 className="mb-2 font-bold">🔍 Match Details</h4>
+      <h4 className="mb-2 flex items-center gap-1.5 font-bold">
+        <Search size={16} /> Match Details
+      </h4>
       <div className="max-h-40 overflow-y-auto rounded-md border border-gray-200 p-3">
         {chunk(data.match_ids_desc, COLS_PER_ROW).map((row, ri) => (
           <div key={ri} className="mb-2 grid grid-cols-3 gap-2 sm:grid-cols-6">
@@ -48,7 +51,7 @@ export function MatchDetailsSection({ data }: { data: LeaderboardResponse }) {
                   key={mid}
                   title={m?.title ?? mid}
                   onClick={() => setSelected(isActive ? null : mid)}
-                  className={`truncate rounded border px-2 py-1 text-xs font-medium ${
+                  className={`btn-raised truncate rounded border px-2 py-1 text-xs font-medium ${
                     isActive
                       ? "border-[#28324f] bg-[#28324f] text-white"
                       : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
