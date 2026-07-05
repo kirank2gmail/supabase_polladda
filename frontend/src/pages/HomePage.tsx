@@ -103,8 +103,8 @@ export function HomePage() {
             title={`Upcoming Matches (${data.upcoming.length})`}
             emptyLabel="No upcoming matches."
           >
-            {data.upcoming.map((c) => (
-              <UpcomingCard key={c.match.match_id} card={c} onClick={goToMatch} />
+            {data.upcoming.map((c, i) => (
+              <UpcomingCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
             ))}
           </Section>
 
@@ -114,8 +114,8 @@ export function HomePage() {
             subtitle="Voting closed — result not yet updated by admin."
             emptyLabel="No matches awaiting result."
           >
-            {data.in_progress.map((c) => (
-              <InProgressCard key={c.match.match_id} card={c} onClick={goToMatch} />
+            {data.in_progress.map((c, i) => (
+              <InProgressCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
             ))}
           </Section>
 
@@ -124,8 +124,8 @@ export function HomePage() {
             title={`Past Matches (${data.completed.length})`}
             emptyLabel="No completed matches yet."
           >
-            {data.completed.map((c) => (
-              <CompletedCard key={c.match.match_id} card={c} onClick={goToMatch} />
+            {data.completed.map((c, i) => (
+              <CompletedCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
             ))}
           </Section>
 
@@ -175,138 +175,156 @@ function Section({
 
 function UpcomingCard({
   card,
+  index,
   onClick,
 }: {
   card: HomeMatchOut;
+  index: number;
   onClick: (matchId: string) => void;
 }) {
   const { match, times, countdown, my_vote } = card;
   const sevClass = countdown ? SEVERITY_STYLES[countdown.severity] : "";
+  const rowBg = index % 2 === 1 ? "bg-gray-50" : "bg-white";
 
   return (
-    <div className="grid grid-cols-1 gap-2 py-3 sm:grid-cols-[4fr_3fr_2fr] sm:items-center">
-      <div>
-        <p className="font-semibold">{match.title}</p>
-        <p className="text-xs text-gray-500">
-          <span className="inline-flex items-center gap-1"><MapPin size={12} /> {match.location}</span> <span className="inline-flex items-center gap-1"><Calendar size={12} /> {times.local}</span>
-        </p>
-        {times.user && (
+    <div className={`flex flex-col gap-2 px-2 py-3 ${rowBg}`}>
+      <div className="flex gap-2">
+        <div className="w-1/2">
+          <p className="font-semibold">{match.title}</p>
           <p className="flex items-center gap-1 text-xs text-gray-500">
-            <Clock size={12} /> Your time: {times.user}
+            <Calendar size={12} /> {times.local}
           </p>
-        )}
-      </div>
-      <div>
-        {countdown && (
-          <span className={`inline-block rounded border px-2 py-1 text-xs font-medium ${sevClass}`}>
-            {countdown.message}
-          </span>
-        )}
-      </div>
-      <div className="text-right">
-        {my_vote && (
-          <p className="mb-1 flex items-center justify-end gap-1 text-sm">
-            Your vote: <b>{my_vote}</b> <CheckCircle2 size={14} className="text-green-700" />
+          <p className="flex items-center gap-1 text-xs text-gray-500">
+            <MapPin size={12} /> {match.location}
           </p>
-        )}
-        <button
-          onClick={() => onClick(match.match_id)}
-          className="btn-raised rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
-        >
-          {my_vote ? "Change →" : "Vote Now →"}
-        </button>
+          {times.user && (
+            <p className="flex items-center gap-1 text-xs text-gray-500">
+              <Clock size={12} /> Your time: {times.user}
+            </p>
+          )}
+        </div>
+        <div className="w-1/2">
+          {my_vote && (
+            <p className="mb-1 flex items-center gap-1 text-sm">
+              Your vote: <b>{my_vote}</b> <CheckCircle2 size={14} className="text-green-700" />
+            </p>
+          )}
+          <button
+            onClick={() => onClick(match.match_id)}
+            className="btn-raised w-full rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+          >
+            {my_vote ? "Change →" : "Vote Now →"}
+          </button>
+        </div>
       </div>
+      {countdown && (
+        <span className={`inline-block w-fit rounded border px-2 py-1 text-xs font-medium ${sevClass}`}>
+          {countdown.message}
+        </span>
+      )}
     </div>
   );
 }
 
 function InProgressCard({
   card,
+  index,
   onClick,
 }: {
   card: HomeMatchOut;
+  index: number;
   onClick: (matchId: string) => void;
 }) {
   const { match, times, my_vote } = card;
+  const rowBg = index % 2 === 1 ? "bg-gray-50" : "bg-white";
   return (
-    <div className="grid grid-cols-1 gap-2 py-3 sm:grid-cols-[4fr_3fr_2fr] sm:items-center">
-      <div>
-        <p className="font-semibold">{match.title}</p>
-        <p className="text-xs text-gray-500">
-          <span className="inline-flex items-center gap-1"><MapPin size={12} /> {match.location}</span> <span className="inline-flex items-center gap-1"><Calendar size={12} /> {times.local}</span>
-        </p>
-      </div>
-      <div className="text-sm">
-        {my_vote ? (
-          <p className="flex items-center gap-1">
-            You voted: <b>{my_vote}</b> <CheckCircle2 size={14} className="text-green-700" />
+    <div className={`flex flex-col gap-2 px-2 py-3 ${rowBg}`}>
+      <div className="flex gap-2">
+        <div className="w-1/2">
+          <p className="font-semibold">{match.title}</p>
+          <p className="flex items-center gap-1 text-xs text-gray-500">
+            <Calendar size={12} /> {times.local}
           </p>
-        ) : (
-          <p className="flex items-center gap-1 text-gray-500">
-            <AlertTriangle size={14} /> No vote cast
+          <p className="flex items-center gap-1 text-xs text-gray-500">
+            <MapPin size={12} /> {match.location}
           </p>
-        )}
-        <p className="flex items-center gap-1 text-xs text-rose-600">
-          <Circle size={8} className="fill-rose-600 text-rose-600" /> Poll closed — awaiting result
-        </p>
+        </div>
+        <div className="w-1/2">
+          {my_vote ? (
+            <p className="mb-1 flex items-center gap-1 text-sm">
+              You voted: <b>{my_vote}</b> <CheckCircle2 size={14} className="text-green-700" />
+            </p>
+          ) : (
+            <p className="mb-1 flex items-center gap-1 text-sm text-gray-500">
+              <AlertTriangle size={14} /> No vote cast
+            </p>
+          )}
+          <button
+            onClick={() => onClick(match.match_id)}
+            className="btn-raised w-full rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+          >
+            View Votes →
+          </button>
+        </div>
       </div>
-      <div className="text-right">
-        <button
-          onClick={() => onClick(match.match_id)}
-          className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
-        >
-          View Votes →
-        </button>
-      </div>
+      <p className="flex items-center gap-1 text-xs text-rose-600">
+        <Circle size={8} className="fill-rose-600 text-rose-600" /> Poll closed — awaiting result
+      </p>
     </div>
   );
 }
 
 function CompletedCard({
   card,
+  index,
   onClick,
 }: {
   card: HomeMatchOut;
+  index: number;
   onClick: (matchId: string) => void;
 }) {
   const { match, times, my_vote, my_points, correct } = card;
   const pts = my_points ?? 0;
   const ptsStr = pts > 0 ? `+${pts.toFixed(2)}` : pts.toFixed(2);
   const ptsClass = pts > 0 ? "text-green-700" : pts < 0 ? "text-rose-700" : "text-gray-600";
+  const rowBg = index % 2 === 1 ? "bg-gray-50" : "bg-white";
 
   return (
-    <div className="grid grid-cols-1 gap-2 py-3 sm:grid-cols-[4fr_3fr_2fr] sm:items-center">
-      <div>
-        <p className="font-semibold">{match.title}</p>
-        <p className="text-xs text-gray-500">
-          <span className="inline-flex items-center gap-1"><MapPin size={12} /> {match.location}</span> <span className="inline-flex items-center gap-1"><Calendar size={12} /> {times.local}</span>
-        </p>
-      </div>
-      <div className="text-sm">
-        <p>Result: <b>{match.result}</b></p>
-        {my_vote ? (
-          <p className="flex items-center gap-1 text-gray-500">
-            Your vote: {my_vote}{" "}
-            {correct ? (
-              <CheckCircle2 size={14} className="text-green-700" />
-            ) : (
-              <XCircle size={14} className="text-rose-700" />
-            )}
+    <div className={`flex flex-col gap-2 px-2 py-3 ${rowBg}`}>
+      <div className="flex gap-2">
+        <div className="w-1/2">
+          <p className="font-semibold">{match.title}</p>
+          <p className="flex items-center gap-1 text-xs text-gray-500">
+            <Calendar size={12} /> {times.local}
           </p>
-        ) : (
-          <p className="flex items-center gap-1 text-gray-500">
-            <AlertTriangle size={14} /> No vote cast
+          <p className="flex items-center gap-1 text-xs text-gray-500">
+            <MapPin size={12} /> {match.location}
           </p>
-        )}
-      </div>
-      <div className="text-right">
-        <p className={`mb-1 text-sm font-bold ${ptsClass}`}>{ptsStr} pts</p>
-        <button
-          onClick={() => onClick(match.match_id)}
-          className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
-        >
-          Details →
-        </button>
+          <p className="text-xs text-gray-500">Result: <b>{match.result}</b></p>
+        </div>
+        <div className="w-1/2">
+          {my_vote ? (
+            <p className="mb-1 flex items-center gap-1 text-sm text-gray-500">
+              Your vote: {my_vote}{" "}
+              {correct ? (
+                <CheckCircle2 size={14} className="text-green-700" />
+              ) : (
+                <XCircle size={14} className="text-rose-700" />
+              )}
+            </p>
+          ) : (
+            <p className="mb-1 flex items-center gap-1 text-sm text-gray-500">
+              <AlertTriangle size={14} /> No vote cast
+            </p>
+          )}
+          <p className={`mb-1 text-sm font-bold ${ptsClass}`}>{ptsStr} pts</p>
+          <button
+            onClick={() => onClick(match.match_id)}
+            className="btn-raised w-full rounded border border-gray-300 px-3 py-1.5 text-sm font-medium hover:bg-gray-50"
+          >
+            Details →
+          </button>
+        </div>
       </div>
     </div>
   );
