@@ -195,7 +195,9 @@ function UpcomingCard({
     <div className={`flex flex-col gap-2 px-2 py-3 ${rowBg}`}>
       <div className="flex gap-2">
         <div className="w-1/2">
-          <p className="font-semibold">{match.title}</p>
+          <p className="font-semibold">
+            <span className="text-xs font-normal text-gray-400">{match.match_id}.</span> {match.title}
+          </p>
           <p className="flex items-center gap-1 text-xs text-gray-500">
             <Calendar size={12} /> {times.local}
           </p>
@@ -246,12 +248,17 @@ function InProgressCard({
     <div className={`flex flex-col gap-2 px-2 py-3 ${rowBg}`}>
       <div className="flex gap-2">
         <div className="w-1/2">
-          <p className="font-semibold">{match.title}</p>
+          <p className="font-semibold">
+            <span className="text-xs font-normal text-gray-400">{match.match_id}.</span> {match.title}
+          </p>
           <p className="flex items-center gap-1 text-xs text-gray-500">
             <Calendar size={12} /> {times.local}
           </p>
           <p className="flex items-center gap-1 text-xs text-gray-500">
             <MapPin size={12} /> {match.location}
+          </p>
+          <p className="flex items-center gap-1 text-xs text-rose-600">
+            <Circle size={8} className="fill-rose-600 text-rose-600" /> Poll closed — awaiting result
           </p>
         </div>
         <div className="w-1/2">
@@ -272,9 +279,6 @@ function InProgressCard({
           </button>
         </div>
       </div>
-      <p className="flex items-center gap-1 text-xs text-rose-600">
-        <Circle size={8} className="fill-rose-600 text-rose-600" /> Poll closed — awaiting result
-      </p>
     </div>
   );
 }
@@ -298,7 +302,9 @@ function CompletedCard({
     <div className={`flex flex-col gap-2 px-2 py-3 ${rowBg}`}>
       <div className="flex gap-2">
         <div className="w-1/2">
-          <p className="font-semibold">{match.title}</p>
+          <p className="font-semibold">
+            <span className="text-xs font-normal text-gray-400">{match.match_id}.</span> {match.title}
+          </p>
           <p className="flex items-center gap-1 text-xs text-gray-500">
             <Calendar size={12} /> {times.local}
           </p>

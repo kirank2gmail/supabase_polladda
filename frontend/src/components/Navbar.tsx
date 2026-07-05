@@ -11,7 +11,7 @@ export function Navbar() {
     }`;
 
   return (
-    <div className="sticky top-0 z-50 border-b border-gray-400 bg-gray-400 shadow-sm">
+    <div className="sticky top-0 z-50 border-b border-gray-300 bg-gray-300 shadow-sm">
       <div className="mx-auto flex max-w-[614px] items-center justify-between px-4 py-2">
         <div className="flex items-center gap-2">
           <span className="text-lg font-extrabold">🏆</span>
