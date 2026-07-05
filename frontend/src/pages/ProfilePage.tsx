@@ -65,9 +65,9 @@ function NicknameCard({
       <p className="mb-2 text-xs text-gray-500">
         Shown on leaderboard and results. Current: <b>{nickname}</b>
       </p>
-      <div className="flex gap-2">
+      <div className="space-y-2">
         <input
-          className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm"
+          className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
           value={value}
           onChange={(e) => setValue(e.target.value)}
         />
@@ -199,9 +199,9 @@ function TimezoneCard({
 
   return (
     <Card title="Timezone">
-      <div className="flex gap-2">
+      <div className="space-y-2">
         <select
-          className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm"
+          className="w-full rounded border border-gray-300 px-3 py-2 text-sm"
           value={value}
           onChange={(e) => setValue(e.target.value)}
         >
