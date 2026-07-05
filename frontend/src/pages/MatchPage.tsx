@@ -11,6 +11,9 @@ import {
   BarChart3,
   User,
   Trophy,
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { getMatches } from "../api/matches";
@@ -211,27 +214,35 @@ function NavBar({
   onNext?: () => void;
 }) {
   return (
-    <div className="mb-4 grid grid-cols-[2fr_1fr_1fr] gap-2">
+    <div className="mb-4 flex items-center justify-between">
       <button
         onClick={onBack}
-        className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
+        title="Back to Matches"
+        aria-label="Back to Matches"
+        className="btn-raised rounded border border-gray-300 p-2 hover:bg-gray-50"
       >
-        ← Back to Matches
+        <ArrowLeft size={18} />
       </button>
-      <button
-        onClick={onPrev}
-        disabled={!onPrev}
-        className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        ◀ Previous
-      </button>
-      <button
-        onClick={onNext}
-        disabled={!onNext}
-        className="btn-raised rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Next ▶
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={onPrev}
+          disabled={!onPrev}
+          title="Previous match"
+          aria-label="Previous match"
+          className="btn-raised rounded border border-gray-300 p-2 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <button
+          onClick={onNext}
+          disabled={!onNext}
+          title="Next match"
+          aria-label="Next match"
+          className="btn-raised rounded border border-gray-300 p-2 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
     </div>
   );
 }
