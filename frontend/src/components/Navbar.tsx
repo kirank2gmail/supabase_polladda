@@ -7,11 +7,11 @@ export function Navbar() {
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex flex-col items-center gap-0.5 rounded px-2 py-1 text-[11px] leading-none font-medium ${
-      isActive ? "bg-[#28324f] text-white" : "text-gray-600 hover:bg-white"
+      isActive ? "bg-[#28324f] text-white" : "text-gray-800 hover:bg-white"
     }`;
 
   return (
-    <div className="border-b border-gray-200 bg-gray-200">
+    <div className="sticky top-0 z-50 border-b border-gray-400 bg-gray-400 shadow-sm">
       <div className="mx-auto flex max-w-[614px] items-center justify-between px-4 py-2">
         <div className="flex items-center gap-2">
           <span className="text-lg font-extrabold">🏆</span>
@@ -36,7 +36,7 @@ export function Navbar() {
             )}
           </nav>
         </div>
-        <div className="flex items-center gap-2 text-gray-500">
+        <div className="flex items-center gap-2 text-gray-800">
           <span className="flex flex-col items-center gap-0.5 text-[11px] leading-none">
             <User size={16} />
             {user?.nickname}
