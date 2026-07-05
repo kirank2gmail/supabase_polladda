@@ -5,7 +5,6 @@ import {
   CalendarClock,
   Hourglass,
   ClipboardList,
-  Trophy,
   MapPin,
   Calendar,
   Clock,
@@ -128,15 +127,6 @@ export function HomePage() {
               <CompletedCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
             ))}
           </Section>
-
-          <div className="mt-4 flex justify-center">
-            <button
-              onClick={() => navigate("/leaderboard")}
-              className="btn-raised flex items-center gap-2 rounded bg-[#28324f] px-4 py-2 text-sm font-medium text-white hover:bg-[#1c2439]"
-            >
-              <Trophy size={16} /> View Full Leaderboard
-            </button>
-          </div>
         </>
       )}
     </div>

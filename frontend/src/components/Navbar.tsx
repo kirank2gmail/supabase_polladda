@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { Home, Trophy, User, Settings } from "lucide-react";
+import { Home, Trophy, User, Settings, LogOut } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 export function Navbar() {
@@ -32,14 +32,16 @@ export function Navbar() {
             )}
           </nav>
         </div>
-        <div className="flex items-center gap-3 text-sm text-gray-500">
-          <span className="flex items-center gap-1.5">
-            <User size={16} /> {user?.nickname}
+        <div className="flex items-center gap-2 text-gray-500">
+          <span className="flex flex-col items-center gap-0.5 text-[11px] leading-none">
+            <User size={16} />
+            {user?.nickname}
           </span>
           <button
             onClick={logout}
-            className="btn-raised rounded border border-gray-300 px-3 py-1 hover:bg-gray-100"
+            className="btn-raised flex flex-col items-center gap-0.5 rounded border border-gray-300 px-2 py-1 text-[11px] leading-none hover:bg-gray-100"
           >
+            <LogOut size={16} />
             Sign Out
           </button>
         </div>

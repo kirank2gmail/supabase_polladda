@@ -3,9 +3,9 @@
 
 html, body {
   /* Stops a horizontal swipe that starts inside a nested scroller (e.g. the
-     leaderboard's frozen-column table) from chaining into the page and
-     triggering mobile Safari's edge swipe-to-go-back gesture, which briefly
-     shows a blank/white page during its transition animation. */
+     leaderboard table) from chaining into the page and triggering mobile
+     Safari's edge swipe-to-go-back gesture, which briefly shows a blank/
+     white page during its transition animation. */
   overscroll-behavior-x: none;
 }
 
@@ -21,19 +21,6 @@ body {
 h1, h2, h3 {
   font-weight: 700;
   letter-spacing: -0.01em;
-}
-
-/* Used by LeaderboardTable's split fixed/scrolling tables: hides the
-   scrolling table's native horizontal scrollbar so it doesn't reserve
-   extra height that the fixed (non-scrolling) table lacks, misaligning
-   the two tables' bottoms. A separate, visible custom scrollbar row
-   below both tables drives the actual scroll position instead. */
-.scrollbar-hide {
-  scrollbar-width: none; /* Firefox */
-  -ms-overflow-style: none; /* legacy Edge/IE */
-}
-.scrollbar-hide::-webkit-scrollbar {
-  display: none; /* Chrome/Safari/newer Edge */
 }
 
 /* Applied to every clickable button across the app for a subtle "raised"
