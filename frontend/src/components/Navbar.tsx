@@ -7,11 +7,11 @@ export function Navbar() {
 
   const linkClass = ({ isActive }: { isActive: boolean }) =>
     `flex flex-col items-center gap-0.5 rounded px-2 py-1 text-[11px] leading-none font-medium ${
-      isActive ? "bg-[#28324f] text-white" : "text-gray-600 hover:bg-gray-100"
+      isActive ? "bg-[#28324f] text-white" : "text-gray-600 hover:bg-white"
     }`;
 
   return (
-    <div className="border-b border-gray-200 bg-white">
+    <div className="border-b border-gray-200 bg-gray-200">
       <div className="mx-auto flex max-w-[614px] items-center justify-between px-4 py-2">
         <div className="flex items-center gap-2">
           <span className="text-lg font-extrabold">🏆</span>
@@ -43,7 +43,7 @@ export function Navbar() {
           </span>
           <button
             onClick={logout}
-            className="btn-raised flex flex-col items-center gap-0.5 rounded border border-gray-300 px-2 py-1 text-[11px] leading-none hover:bg-gray-100"
+            className="btn-raised flex flex-col items-center gap-0.5 rounded border border-gray-300 px-2 py-1 text-[11px] leading-none hover:bg-white"
           >
             <LogOut size={16} />
             Sign Out

@@ -58,8 +58,12 @@ export function LeaderboardTable({
       {/* Single table, single native horizontal scrollbar (visible at the
           bottom of this container) — a prior frozen-column + custom-scrollbar
           split caused mobile touch scrolling to break, so back to the
-          simplest thing that reliably scrolls on touch devices. */}
-      <div className="touch-pan-x overflow-x-auto overscroll-x-contain rounded-md border border-gray-300">
+          simplest thing that reliably scrolls on touch devices.
+          touch-pan-x alone would block vertical swipes that start on this
+          element, trapping the page scroll once the table fills the
+          viewport — pan-y is included so a vertical swipe still scrolls
+          the page while a horizontal one scrolls the table. */}
+      <div className="touch-pan-x touch-pan-y overflow-x-auto overscroll-x-contain rounded-md border border-gray-300">
         <table className="w-full border-collapse text-sm whitespace-nowrap">
           <thead>
             <tr className="bg-[#28324f] text-white">
