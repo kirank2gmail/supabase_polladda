@@ -22,7 +22,7 @@ export default function AdminPage() {
   const [tab, setTab] = useState<TabKey>("users");
 
   return (
-    <div className="mx-auto max-w-5xl p-4">
+    <div className="mx-auto max-w-[614px] p-4">
       <h1 className="flex items-center gap-2 text-xl font-bold">
         <Settings size={20} /> Admin Panel
       </h1>

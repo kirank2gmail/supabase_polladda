@@ -113,13 +113,13 @@ export function MatchPage() {
   };
 
   if (loading) {
-    return <div className="mx-auto max-w-3xl p-4 text-gray-500">Loading…</div>;
+    return <div className="mx-auto max-w-[614px] p-4 text-gray-500">Loading…</div>;
   }
   if (error && !detail) {
-    return <div className="mx-auto max-w-3xl p-4 text-rose-600">{error}</div>;
+    return <div className="mx-auto max-w-[614px] p-4 text-rose-600">{error}</div>;
   }
   if (!detail || !matchId) {
-    return <div className="mx-auto max-w-3xl p-4 text-rose-600">Match not found.</div>;
+    return <div className="mx-auto max-w-[614px] p-4 text-rose-600">Match not found.</div>;
   }
 
   const { match, times, countdown, my_vote } = detail;
@@ -129,7 +129,7 @@ export function MatchPage() {
   const hasNext = curIdx >= 0 && curIdx < matchList.length - 1;
 
   return (
-    <div className="mx-auto max-w-3xl p-4">
+    <div className="mx-auto max-w-[614px] p-4">
       <NavBar
         onBack={() => navigate("/", { state: { tournamentId: navState.tournamentId } })}
         onPrev={hasPrev ? () => navigate(`/match/${matchList[curIdx - 1]}`, { state: navState }) : undefined}

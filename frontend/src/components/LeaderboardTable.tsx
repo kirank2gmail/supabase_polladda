@@ -146,7 +146,7 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
         <div
           ref={contentRef}
           onScroll={syncFromContent}
-          className="scrollbar-hide min-w-0 flex-1 overflow-x-auto"
+          className="scrollbar-hide min-w-0 flex-1 touch-pan-x overflow-x-auto overscroll-x-contain"
         >
           <table className="w-full border-collapse text-sm whitespace-nowrap">
             <thead>
@@ -221,7 +221,7 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
         <div
           ref={scrollbarRef}
           onScroll={syncFromScrollbar}
-          className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden"
+          className="min-w-0 flex-1 touch-pan-x overflow-x-auto overflow-y-hidden overscroll-x-contain"
         >
           <div style={{ width: contentWidth, height: 1 }} />
         </div>

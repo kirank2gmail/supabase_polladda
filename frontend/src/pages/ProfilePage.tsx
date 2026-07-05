@@ -7,7 +7,7 @@ export function ProfilePage() {
   const { user, refreshUser } = useAuth();
 
   return (
-    <div className="mx-auto max-w-xl p-4">
+    <div className="mx-auto max-w-[614px] p-4">
       <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
         <User size={20} /> My Profile
       </h1>

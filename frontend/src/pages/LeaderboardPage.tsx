@@ -39,7 +39,7 @@ export function LeaderboardPage() {
   }, [selected]);
 
   return (
-    <div className="mx-auto max-w-5xl p-4">
+    <div className="mx-auto max-w-[614px] p-4">
       <h1 className="mb-4 flex items-center gap-2 text-xl font-bold">
         <Trophy size={20} /> Leaderboard
       </h1>

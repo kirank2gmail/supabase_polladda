@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 
+html, body {
+  /* Stops a horizontal swipe that starts inside a nested scroller (e.g. the
+     leaderboard's frozen-column table) from chaining into the page and
+     triggering mobile Safari's edge swipe-to-go-back gesture, which briefly
+     shows a blank/white page during its transition animation. */
+  overscroll-behavior-x: none;
+}
+
 body {
   margin: 0;
   font-family: "Inter Variable", system-ui, "Segoe UI", Roboto, sans-serif;
