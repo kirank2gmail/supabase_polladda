@@ -24,6 +24,8 @@ const SEVERITY_STYLES: Record<string, string> = {
   error: "bg-rose-50 text-rose-700 border-rose-200",
 };
 
+type HomeTabKey = "upcoming" | "in_progress" | "completed";
+
 export function HomePage() {
   const navigate = useNavigate();
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
@@ -31,6 +33,7 @@ export function HomePage() {
   const [data, setData] = useState<HomeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<HomeTabKey>("upcoming");
 
   useEffect(() => {
     getTournaments()
@@ -97,36 +100,55 @@ export function HomePage() {
 
       {!loading && !error && data && (
         <>
-          <Section
-            icon={CalendarClock}
-            title={`Upcoming Matches (${data.upcoming.length})`}
-            emptyLabel="No upcoming matches."
-          >
-            {data.upcoming.map((c, i) => (
-              <UpcomingCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
+          <div className="mb-4 flex gap-2 border-b border-gray-200">
+            {(
+              [
+                { key: "upcoming", label: `Upcoming (${data.upcoming.length})`, icon: CalendarClock },
+                { key: "in_progress", label: `In Progress (${data.in_progress.length})`, icon: Hourglass },
+                { key: "completed", label: `Past (${data.completed.length})`, icon: ClipboardList },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`flex flex-1 flex-col items-center gap-0.5 px-2 py-2 text-[11px] leading-none font-medium ${
+                  tab === t.key
+                    ? "border-b-2 border-[#28324f] text-[#28324f]"
+                    : "text-gray-500 hover:text-gray-800"
+                }`}
+              >
+                <t.icon size={16} />
+                {t.label}
+              </button>
             ))}
-          </Section>
+          </div>
 
-          <Section
-            icon={Hourglass}
-            title={`In Progress (${data.in_progress.length})`}
-            subtitle="Voting closed — result not yet updated by admin."
-            emptyLabel="No matches awaiting result."
-          >
-            {data.in_progress.map((c, i) => (
-              <InProgressCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
-            ))}
-          </Section>
+          {tab === "upcoming" && (
+            <Section emptyLabel="No upcoming matches.">
+              {data.upcoming.map((c, i) => (
+                <UpcomingCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
+              ))}
+            </Section>
+          )}
 
-          <Section
-            icon={ClipboardList}
-            title={`Past Matches (${data.completed.length})`}
-            emptyLabel="No completed matches yet."
-          >
-            {data.completed.map((c, i) => (
-              <CompletedCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
-            ))}
-          </Section>
+          {tab === "in_progress" && (
+            <Section
+              subtitle="Voting closed — result not yet updated by admin."
+              emptyLabel="No matches awaiting result."
+            >
+              {data.in_progress.map((c, i) => (
+                <InProgressCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
+              ))}
+            </Section>
+          )}
+
+          {tab === "completed" && (
+            <Section emptyLabel="No completed matches yet.">
+              {data.completed.map((c, i) => (
+                <CompletedCard key={c.match.match_id} card={c} index={i} onClick={goToMatch} />
+              ))}
+            </Section>
+          )}
         </>
       )}
     </div>
@@ -134,28 +156,21 @@ export function HomePage() {
 }
 
 function Section({
-  icon: Icon,
-  title,
   subtitle,
   emptyLabel,
   children,
 }: {
-  icon: React.ComponentType<{ size?: number }>;
-  title: string;
   subtitle?: string;
   emptyLabel: string;
   children: React.ReactNode[];
 }) {
   return (
-    <div className="mb-5">
-      <h2 className="mb-1 flex items-center gap-2 text-lg font-bold">
-        <Icon size={18} /> {title}
-      </h2>
+    <div>
       {subtitle && <p className="mb-2 text-sm text-gray-500">{subtitle}</p>}
       {children.length === 0 ? (
         <p className="text-sm text-gray-500">{emptyLabel}</p>
       ) : (
-        <div className="max-h-80 divide-y divide-gray-100 overflow-y-auto rounded-md border border-gray-200 p-2">
+        <div className="divide-y divide-gray-100 rounded-md border border-gray-200 p-2">
           {children}
         </div>
       )}

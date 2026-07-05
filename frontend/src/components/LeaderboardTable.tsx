@@ -11,7 +11,13 @@ const SORT_OPTIONS: { label: string; key: SortKey; desc: boolean }[] = [
   { label: "Alphabetical", key: "name", desc: false },
 ];
 
-export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
+export function LeaderboardTable({
+  data,
+  extra,
+}: {
+  data: LeaderboardResponse;
+  extra?: React.ReactNode;
+}) {
   const [sortIdx, setSortIdx] = useState(0);
   const sort = SORT_OPTIONS[sortIdx];
 
@@ -31,19 +37,22 @@ export function LeaderboardTable({ data }: { data: LeaderboardResponse }) {
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
-        <span className="text-sm text-gray-600">Sort by</span>
-        <select
-          className="rounded border border-gray-300 px-2 py-1 text-sm"
-          value={sortIdx}
-          onChange={(e) => setSortIdx(Number(e.target.value))}
-        >
-          {SORT_OPTIONS.map((o, i) => (
-            <option key={o.label} value={i}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Sort by</span>
+          <select
+            className="rounded border border-gray-300 px-2 py-1 text-sm"
+            value={sortIdx}
+            onChange={(e) => setSortIdx(Number(e.target.value))}
+          >
+            {SORT_OPTIONS.map((o, i) => (
+              <option key={o.label} value={i}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {extra}
       </div>
 
       {/* Single table, single native horizontal scrollbar (visible at the

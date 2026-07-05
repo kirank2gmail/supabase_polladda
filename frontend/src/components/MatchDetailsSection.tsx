@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Search } from "lucide-react";
 import type { LeaderboardResponse } from "../api/types";
 import { cellColours, cellText } from "../lib/cellFormat";
 
@@ -17,9 +16,11 @@ function chunk<T>(items: T[], size: number): T[][] {
 // built, clicking a match expands an inline per-player breakdown using data
 // already present in the leaderboard response (no extra API calls).
 export function MatchDetailsSection({ data }: { data: LeaderboardResponse }) {
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(data.match_ids_desc[0] ?? null);
 
-  if (data.match_ids_desc.length === 0) return null;
+  if (data.match_ids_desc.length === 0) {
+    return <p className="text-sm text-gray-500">No completed matches yet.</p>;
+  }
 
   const match = selected
     ? data.matches_asc.find((m) => m.match_id === selected)
@@ -36,10 +37,7 @@ export function MatchDetailsSection({ data }: { data: LeaderboardResponse }) {
     : [];
 
   return (
-    <div className="mt-4">
-      <h4 className="mb-2 flex items-center gap-1.5 font-bold">
-        <Search size={16} /> Match Details
-      </h4>
+    <div>
       <div className="max-h-40 overflow-y-auto rounded-md border border-gray-200 p-3">
         {chunk(data.match_ids_desc, COLS_PER_ROW).map((row, ri) => (
           <div key={ri} className="mb-2 grid grid-cols-3 gap-2 sm:grid-cols-6">

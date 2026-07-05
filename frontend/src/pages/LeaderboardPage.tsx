@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Trophy, BarChart3, Download } from "lucide-react";
+import { Trophy, BarChart3, Search, Coins, Download } from "lucide-react";
 import { getLeaderboard, getTournaments } from "../api/tournaments";
 import type { LeaderboardResponse, Tournament } from "../api/types";
 import { LeaderboardTable } from "../components/LeaderboardTable";
@@ -8,12 +8,21 @@ import { PenaltiesTable } from "../components/PenaltiesTable";
 import { MatchDetailsSection } from "../components/MatchDetailsSection";
 import { buildLeaderboardCsv, downloadCsv } from "../lib/csvExport";
 
+type LbTabKey = "leaderboard" | "matches" | "penalties";
+
+const TABS = [
+  { key: "leaderboard", label: "Leaderboard", icon: BarChart3 },
+  { key: "matches", label: "Match Details", icon: Search },
+  { key: "penalties", label: "Penalties", icon: Coins },
+] as const;
+
 export function LeaderboardPage() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [data, setData] = useState<LeaderboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<LbTabKey>("leaderboard");
 
   useEffect(() => {
     getTournaments()
@@ -68,20 +77,43 @@ export function LeaderboardPage() {
       {!loading && !error && data && data.rows.length > 0 && (
         <>
           <HeroCards heroes={data.heroes} />
-          <h2 className="mb-2 flex items-center gap-1.5 text-lg font-bold">
-            <BarChart3 size={18} /> Leaderboard
-          </h2>
-          <LeaderboardTable data={data} />
-          <button
-            onClick={() =>
-              downloadCsv(`leaderboard_${selected}.csv`, buildLeaderboardCsv(data))
-            }
-            className="btn-raised mt-3 flex items-center gap-1.5 rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
-          >
-            <Download size={14} /> Download CSV
-          </button>
-          <PenaltiesTable penalties={data.penalties} />
-          <MatchDetailsSection data={data} />
+
+          <div className="mb-4 flex gap-2 border-b border-gray-200">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`flex flex-1 flex-col items-center gap-0.5 px-2 py-2 text-[11px] leading-none font-medium ${
+                  tab === t.key
+                    ? "border-b-2 border-[#28324f] text-[#28324f]"
+                    : "text-gray-500 hover:text-gray-800"
+                }`}
+              >
+                <t.icon size={16} />
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {tab === "leaderboard" && (
+            <LeaderboardTable
+              data={data}
+              extra={
+                <button
+                  onClick={() =>
+                    downloadCsv(`leaderboard_${selected}.csv`, buildLeaderboardCsv(data))
+                  }
+                  className="btn-raised flex items-center gap-1.5 rounded bg-[#28324f] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#1c2439]"
+                >
+                  <Download size={14} /> Download CSV
+                </button>
+              }
+            />
+          )}
+
+          {tab === "matches" && <MatchDetailsSection data={data} />}
+
+          {tab === "penalties" && <PenaltiesTable penalties={data.penalties} />}
         </>
       )}
     </div>

@@ -1,14 +1,12 @@
-import { Coins } from "lucide-react";
 import type { PenaltyOut } from "../api/types";
 
 export function PenaltiesTable({ penalties }: { penalties: PenaltyOut[] }) {
-  if (!penalties || penalties.length === 0) return null;
+  if (!penalties || penalties.length === 0) {
+    return <p className="text-sm text-gray-500">No penalties recorded for this tournament.</p>;
+  }
 
   return (
-    <div className="mt-4">
-      <h4 className="mb-2 flex items-center gap-1.5 font-bold">
-        <Coins size={16} /> Manual Penalties
-      </h4>
+    <div>
       <div className="max-h-80 overflow-auto rounded-md border border-gray-200">
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0">
